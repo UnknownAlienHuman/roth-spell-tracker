@@ -1,0 +1,24 @@
+## Interface: 120001, 120005
+## Title: Roth Spell Tracker
+## Notes: Mini tracker for spells/auras/cooldowns (TellMeWhen-style). Secret-safe patterns for WoW 12.0+.
+## Author: Neomorph
+## Version: 0.2.1
+## SavedVariables: RothSpellTrackerDB
+
+# libs
+libs\LibStub\LibStub.lua
+libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
+libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
+
+# core
+Core\Config.lua
+Core\Logging.lua
+Core\Util.lua
+Core\Minimap.lua
+Core\ConfigUI.lua
+Core\Core.lua
+
+# modules
+Modules\Display.lua
+Modules\Tracker.lua
