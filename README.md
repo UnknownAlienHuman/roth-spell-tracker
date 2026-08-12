@@ -13,7 +13,7 @@ Copy `RothSpellTracker` to `World of Warcraft/_retail_/Interface/AddOns/`, enabl
 
 ## Use
 
-`/rst` opens the tracker configuration. The configuration UI supports AURA and SPELL entries, including per-entry enablement and ordering; display options include show modes and a glow overlay. A minimap icon is initialized through the embedded broker libraries.
+`/rst` opens the tracker configuration when this addon's handler owns the alias. The configuration UI supports AURA and SPELL entries, including per-entry enablement and ordering; display options include show modes and a glow overlay. A minimap icon is initialized through the embedded broker libraries. `RothSecretTester` also declares `/rst`, so verify the final slash registration when both addons are enabled.
 
 ## Current development status
 

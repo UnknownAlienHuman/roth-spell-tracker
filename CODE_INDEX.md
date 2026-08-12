@@ -1,12 +1,13 @@
 # Code index
 
-| Area | Files | Responsibility |
+| Area | Files | Exact anchors |
 | --- | --- | --- |
-| Startup and DB | `Core/Core.lua`, `Core/Config.lua` | migrations, defaults, component startup, slash command |
-| Support | `Core/Util.lua`, `Core/Logging.lua`, `Core/Minimap.lua` | helpers, ring-buffer logging, broker/minimap icon |
-| Configuration | `Core/ConfigUI.lua` | tracker editor and list UI |
-| Tracking | `Modules/Tracker.lua` | event-driven aura/spell state refresh |
-| Rendering | `Modules/Display.lua` | anchor, icons, cooldown and glow presentation |
-| Libraries | `libs/` | LibStub, CallbackHandler, LDB, DBIcon |
+| Startup/DB | [`Core/Core.lua`](Core/Core.lua), [`Core/Config.lua`](Core/Config.lua) | `Addon:InitDB`, `MigrateV1toV2`, `SanitizeDB`, `Slash`, `Addon:ResetDB` |
+| Secret-safe helpers | [`Core/Util.lua`](Core/Util.lua) | `U.IsSecret`, `U.CanAccess`, `U.SafeBool`, `U.SafeNumber`, spell wrappers |
+| Support | [`Core/Logging.lua`](Core/Logging.lua), [`Core/Minimap.lua`](Core/Minimap.lua) | `Addon:Log`, `Addon:DumpLog`, `Addon:InitMinimapIcon` |
+| Configuration UI | [`Core/ConfigUI.lua`](Core/ConfigUI.lua) | `UI:Create`, `UI:SaveEntryFromForm`, `UI:Refresh`, `UI:MoveEntry`, `Addon:ToggleConfig` |
+| Tracking | [`Modules/Tracker.lua`](Modules/Tracker.lua) | `T:Init`, `T:RequestRefresh`, `T:Refresh`, `EvalSpell`, `EvalAura` |
+| Rendering | [`Modules/Display.lua`](Modules/Display.lua) | `D:Init`, `D:GetIcon`, `D:SetCount`, `D:SetIconGlow`, cooldown updates |
+| Vendored libraries | [`libs/`](libs/) | LibStub, CallbackHandler, LDB, DBIcon |
 
-Primary anchors: `Slash`, `NewDB`, `T:Init`, and the display-anchor creation path.
+Entry is TOC/lifecycle-driven; `/rst` is registered only after `ADDON_LOADED` for this addon.
