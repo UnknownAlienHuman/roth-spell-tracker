@@ -18,3 +18,7 @@ Copy `RothSpellTracker` to `World of Warcraft/_retail_/Interface/AddOns/`, enabl
 ## Current development status
 
 The baseline MVP, scalable AURA/SPELL list, glow display, and several UI-quality items are recorded as complete. Open work is plain-text import/export, visibility/glow presets, and advanced combat/instance/target/spec filters. See [todo.md](todo.md).
+
+## License
+
+Licensed under the [MIT License](LICENSE). Bundled third-party components remain under their own notices.
