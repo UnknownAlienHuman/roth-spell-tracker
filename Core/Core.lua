@@ -4,302 +4,302 @@ NS.Addon = NS.Addon or {}
 local Addon = NS.Addon
 local U = Addon.Util
 
--- SavedVariables
 RothSpellTrackerDB = RothSpellTrackerDB or nil
 
-local function NewDB()
-  local db = U.DeepCopy(Addon.Defaults)
-  return db
-end
+local TRACK_CAP = 500
 
-local function SortTracksByID(tracks)
-  table.sort(tracks, function(a, b)
-    local ai = (type(a) == "table" and type(a.id) == "number") and a.id or 0
-    local bi = (type(b) == "table" and type(b.id) == "number") and b.id or 0
-    if ai == bi then
-      local ak = (type(a) == "table" and a.kind) or ""
-      local bk = (type(b) == "table" and b.kind) or ""
-      return ak < bk
-    end
-    return ai < bi
-  end)
+local function NewDB()
+  return U.DeepCopy(Addon.Defaults) or {
+    version = Addon.DB_VERSION,
+    nextUID = 1,
+    debug = false,
+    minimap = { hide = false, minimapPos = 220 },
+    frame = { point = "CENTER", relPoint = "CENTER", x = 0, y = -120, size = 44, spacing = 6, locked = true, grow = "RIGHT" },
+    tracks = {},
+  }
 end
 
 local function MigrateV1toV2(db)
-  -- v1 schema stored entries in db.spells[spellID] = { enabled, mode=AURA/COOLDOWN, ... }
-  -- v2 uses db.tracks = array with stable order + explicit kind (AURA/SPELL)
-  local spells = db.spells
-  if type(spells) ~= "table" then
-    db.tracks = db.tracks or {}
-    db.spells = nil
-    return
-  end
-
+  local spells = U.SafeTable(db.spells)
   local tracks = {}
-  for sid, e in pairs(spells) do
-    local id = tonumber(sid)
-    if id and id >= 1 and type(e) == "table" then
-      local mode = e.mode or "AURA"
-      local kind = (mode == "COOLDOWN") and "SPELL" or "AURA"
-      local showWhen
-      if kind == "SPELL" then
-        showWhen = e.showWhen or "READY"
-      else
-        showWhen = e.showWhen or "ACTIVE"
+  if spells then
+    for rawID, rawEntry in pairs(spells) do
+      if #tracks >= TRACK_CAP then break end
+      local id = U.ToNumber(rawID)
+      local entry = U.SafeTable(rawEntry)
+      if id and id >= 1 and entry then
+        local mode = U.SafeString(entry.mode) or "AURA"
+        local kind = mode == "COOLDOWN" and "SPELL" or "AURA"
+        tracks[#tracks + 1] = {
+          id = math.floor(id + 0.5),
+          kind = kind,
+          enabled = U.SafeBool(entry.enabled) ~= false,
+          showWhen = U.SafeString(entry.showWhen) or (kind == "SPELL" and "READY" or "ACTIVE"),
+          ignoreGCD = U.SafeBool(entry.ignoreGCD) ~= false,
+          unit = U.SafeString(entry.unit) or "player",
+          auraType = U.SafeString(entry.auraType) or "HELPFUL",
+        }
       end
-
-      tracks[#tracks + 1] = {
-        id = id,
-        kind = kind,
-        enabled = (e.enabled ~= false),
-        showWhen = showWhen,
-        ignoreGCD = (e.ignoreGCD ~= false),
-        unit = e.unit or "player",
-        auraType = e.auraType or "HELPFUL",
-        minStacks = tonumber(e.minStacks) or 0,
-      }
     end
   end
-
-  SortTracksByID(tracks)
+  table.sort(tracks, function(a, b)
+    if a.id == b.id then return a.kind < b.kind end
+    return a.id < b.id
+  end)
   db.tracks = tracks
   db.spells = nil
+  db.version = 2
 end
 
--- Defensive sanitize for SavedVariables (aligned in spirit with InterruptGlow).
--- Goal: prevent corrupted SV (or secret values) from breaking logic.
-local function SanitizeDB(db)
-  if type(db) ~= "table" then return end
+local function MigrateV2toV3(db)
+  local tracks = U.SafeTable(db.tracks) or {}
+  local nextUID = 1
+  for index = 1, #tracks do
+    local entry = U.SafeTable(tracks[index])
+    if entry then
+      local uid = U.SafeNumber(entry.uid)
+      if not uid or uid < 1 then
+        uid = nextUID
+        entry.uid = uid
+      end
+      uid = math.floor(uid + 0.5)
+      if uid >= nextUID then nextUID = uid + 1 end
 
-  -- debug
-  local dbg = U.SafeBool(db.debug)
-  if dbg == nil then dbg = false end
-  db.debug = dbg
+      local kind = U.SafeString(entry.kind) or "AURA"
+      if kind == "AURA" then
+        local showWhen = U.SafeString(entry.showWhen)
+        if showWhen ~= "ACTIVE" and showWhen ~= "ALWAYS" then
+          entry.showWhen = "ALWAYS"
+        end
+        entry.minStacks = nil
+      end
+    end
+  end
+  db.nextUID = nextUID
+  db.version = 3
+end
 
-  -- minimap
-  if type(db.minimap) ~= "table" then db.minimap = {} end
-  local mh = U.SafeBool(db.minimap.hide)
-  db.minimap.hide = (mh == true)
-  local pos = U.SafeNumber(db.minimap.minimapPos)
-  if not pos then pos = 220 end
-  if pos < 0 then pos = 0 end
-  if pos > 360 then pos = 360 end
-  db.minimap.minimapPos = pos
+local function SanitizeFrame(db)
+  db.frame = U.SafeTable(db.frame) or {}
+  local frame = db.frame
+  frame.point = U.SafeString(frame.point) or "CENTER"
+  frame.relPoint = U.SafeString(frame.relPoint) or "CENTER"
+  frame.x = U.SafeNumber(frame.x) or 0
+  frame.y = U.SafeNumber(frame.y) or -120
 
-  -- frame
-  if type(db.frame) ~= "table" then db.frame = {} end
-  local size = U.SafeNumber(db.frame.size) or 44
-  if size < 16 then size = 16 end
-  if size > 128 then size = 128 end
-  db.frame.size = math.floor(size + 0.5)
+  local size = U.SafeNumber(frame.size) or 44
+  if size < 16 then size = 16 elseif size > 128 then size = 128 end
+  frame.size = math.floor(size + 0.5)
 
-  local spacing = U.SafeNumber(db.frame.spacing) or 6
-  if spacing < 0 then spacing = 0 end
-  if spacing > 60 then spacing = 60 end
-  db.frame.spacing = math.floor(spacing + 0.5)
+  local spacing = U.SafeNumber(frame.spacing) or 6
+  if spacing < 0 then spacing = 0 elseif spacing > 60 then spacing = 60 end
+  frame.spacing = math.floor(spacing + 0.5)
 
-  local locked = U.SafeBool(db.frame.locked)
-  db.frame.locked = (locked ~= false)
-
-  local grow = (U.CanAccess(db.frame.grow) and db.frame.grow) or "RIGHT"
+  frame.locked = U.SafeBool(frame.locked) ~= false
+  local grow = U.SafeString(frame.grow) or "RIGHT"
   if grow ~= "RIGHT" and grow ~= "LEFT" and grow ~= "UP" and grow ~= "DOWN" then
     grow = "RIGHT"
   end
-  db.frame.grow = grow
+  frame.grow = grow
+end
 
-  -- position fields: keep if strings/numbers, otherwise default
-  if not (U.CanAccess(db.frame.point) and type(db.frame.point) == "string") then db.frame.point = "CENTER" end
-  if not (U.CanAccess(db.frame.relPoint) and type(db.frame.relPoint) == "string") then db.frame.relPoint = "CENTER" end
-  db.frame.x = U.SafeNumber(db.frame.x) or 0
-  db.frame.y = U.SafeNumber(db.frame.y) or -120
+local function SanitizeMinimap(db)
+  db.minimap = U.SafeTable(db.minimap) or {}
+  db.minimap.hide = U.SafeBool(db.minimap.hide) == true
+  local position = U.SafeNumber(db.minimap.minimapPos) or 220
+  if position < 0 then position = 0 elseif position > 360 then position = 360 end
+  db.minimap.minimapPos = position
+end
 
-  -- tracks
-  local src = db.tracks
-  if type(src) ~= "table" then
-    db.tracks = {}
-    return
+local function SanitizeTracks(db)
+  local source = U.SafeTable(db.tracks) or {}
+  local numericKeys = {}
+  for key in pairs(source) do
+    if type(key) == "number" and key >= 1 then numericKeys[#numericKeys + 1] = key end
   end
+  table.sort(numericKeys)
 
-  -- preserve stable order: numeric keys ascending
-  local keys = {}
-  for k in pairs(src) do
-    if type(k) == "number" then
-      keys[#keys + 1] = k
-    end
-  end
-  table.sort(keys)
+  local nextUID = U.SafeNumber(db.nextUID) or 1
+  nextUID = math.max(1, math.floor(nextUID + 0.5))
+  local seenUID = {}
+  local seenTrack = {}
+  local output = {}
 
-  local out = {}
-  local seen = {}
-  local cap = 500
-
-  for i = 1, #keys do
-    if #out >= cap then break end
-    local e = src[keys[i]]
-    if type(e) == "table" then
-      local id = U.SafeNumber(e.id)
+  for _, key in ipairs(numericKeys) do
+    if #output >= TRACK_CAP then break end
+    local entry = U.SafeTable(source[key])
+    if entry then
+      local id = U.SafeNumber(entry.id)
       id = id and math.floor(id + 0.5) or nil
       if id and id >= 1 then
-        local kind = (U.CanAccess(e.kind) and e.kind) or "AURA"
-        if kind ~= "AURA" and kind ~= "SPELL" then kind = "AURA" end
+        local kind = U.SafeString(entry.kind) or "AURA"
+        if kind ~= "SPELL" and kind ~= "AURA" then kind = "AURA" end
 
-        local key = kind .. ":" .. id
-        if not seen[key] then
-          seen[key] = true
+        local uid = U.SafeNumber(entry.uid)
+        uid = uid and math.floor(uid + 0.5) or nil
+        if not uid or uid < 1 or seenUID[uid] then
+          while seenUID[nextUID] do nextUID = nextUID + 1 end
+          uid = nextUID
+          nextUID = nextUID + 1
+        end
+        seenUID[uid] = true
+        if uid >= nextUID then nextUID = uid + 1 end
 
-          local enabled = U.SafeBool(e.enabled)
-          if enabled == nil then enabled = true end
+        local clean = {
+          uid = uid,
+          id = id,
+          kind = kind,
+          enabled = U.SafeBool(entry.enabled) ~= false,
+        }
 
-          local showWhen = (U.CanAccess(e.showWhen) and e.showWhen) or "ALWAYS"
-          if kind == "SPELL" then
-            if showWhen ~= "ALWAYS" and showWhen ~= "READY" and showWhen ~= "NOTREADY" then
-              showWhen = "ALWAYS"
-            end
-          else
-            if showWhen ~= "ALWAYS" and showWhen ~= "ACTIVE" and showWhen ~= "INACTIVE" then
-              showWhen = "ALWAYS"
-            end
+        local dedupeKey
+        if kind == "SPELL" then
+          local showWhen = U.SafeString(entry.showWhen) or "ALWAYS"
+          if showWhen ~= "ALWAYS" and showWhen ~= "READY" and showWhen ~= "NOTREADY" then
+            showWhen = "ALWAYS"
           end
+          clean.showWhen = showWhen
+          clean.ignoreGCD = U.SafeBool(entry.ignoreGCD) ~= false
+          dedupeKey = "SPELL:" .. id
+        else
+          local showWhen = U.SafeString(entry.showWhen) or "ALWAYS"
+          if showWhen ~= "ALWAYS" and showWhen ~= "ACTIVE" then showWhen = "ALWAYS" end
+          clean.showWhen = showWhen
 
-          local clean = {
-            id = id,
-            kind = kind,
-            enabled = enabled,
-            showWhen = showWhen,
-          }
+          local unit = U.SafeString(entry.unit) or "player"
+          if unit ~= "player" and unit ~= "target" and unit ~= "focus" then unit = "player" end
+          clean.unit = unit
 
-          if kind == "SPELL" then
-            local ig = U.SafeBool(e.ignoreGCD)
-            if ig == nil then ig = true end
-            clean.ignoreGCD = (ig == true)
-          else
-            local unit = (U.CanAccess(e.unit) and e.unit) or "player"
-            if unit ~= "player" and unit ~= "target" and unit ~= "focus" then unit = "player" end
-            clean.unit = unit
+          local auraType = U.SafeString(entry.auraType) or "HELPFUL"
+          if auraType ~= "HELPFUL" and auraType ~= "HARMFUL" then auraType = "HELPFUL" end
+          clean.auraType = auraType
+          dedupeKey = table.concat({ "AURA", id, unit, auraType }, ":")
+        end
 
-            local at = (U.CanAccess(e.auraType) and e.auraType) or "HELPFUL"
-            if at ~= "HELPFUL" and at ~= "HARMFUL" then at = "HELPFUL" end
-            clean.auraType = at
-
-            local ms = U.SafeNumber(e.minStacks)
-            ms = ms and math.floor(ms + 0.5) or 0
-            if ms < 0 then ms = 0 end
-            if ms > 100 then ms = 100 end
-            clean.minStacks = ms
-          end
-
-          out[#out + 1] = clean
+        if not seenTrack[dedupeKey] then
+          seenTrack[dedupeKey] = true
+          output[#output + 1] = clean
         end
       end
     end
   end
 
-  db.tracks = out
+  db.tracks = output
+  db.nextUID = nextUID
+end
+
+local function SanitizeDB(db)
+  db.debug = U.SafeBool(db.debug) == true
+  SanitizeMinimap(db)
+  SanitizeFrame(db)
+  SanitizeTracks(db)
+  db.version = Addon.DB_VERSION
+end
+
+function Addon:AllocateTrackUID()
+  local nextUID = self.db and U.SafeNumber(self.db.nextUID) or 1
+  nextUID = math.max(1, math.floor((nextUID or 1) + 0.5))
+  self.db.nextUID = nextUID + 1
+  return nextUID
 end
 
 function Addon:InitDB()
-  local db = RothSpellTrackerDB
-  if type(db) ~= "table" or type(db.version) ~= "number" then
-    db = NewDB()
-  end
+  local db = U.SafeTable(RothSpellTrackerDB)
+  if not db then db = NewDB() end
 
-  -- migrations / defaults
-  U.CopyDefaults(db, Addon.Defaults)
-
-  -- Schema migrations
-  if db.version == 1 and Addon.DB_VERSION == 2 then
+  local version = U.SafeNumber(db.version)
+  if version == 1 then
     MigrateV1toV2(db)
-    db.version = 2
-  elseif db.version ~= Addon.DB_VERSION then
-    -- Safe policy for unknown schema: wipe, preserve minimap.
-    local keepMinimap = (type(db.minimap) == "table") and U.DeepCopy(db.minimap) or nil
+    version = 2
+  end
+  if version == 2 then
+    MigrateV2toV3(db)
+    version = 3
+  end
+  if version ~= Addon.DB_VERSION then
+    local oldMinimap = U.DeepCopy(U.SafeTable(db.minimap))
+    local oldFrame = U.DeepCopy(U.SafeTable(db.frame))
     db = NewDB()
-    if keepMinimap then db.minimap = keepMinimap end
-    db.version = Addon.DB_VERSION
+    if oldMinimap then db.minimap = oldMinimap end
+    if oldFrame then db.frame = oldFrame end
   end
 
+  U.CopyDefaults(db, Addon.Defaults)
+  SanitizeDB(db)
   RothSpellTrackerDB = db
   self.db = db
+end
 
-  -- Final sanitize pass (post-migration + post-defaults).
-  SanitizeDB(self.db)
+function Addon:RequestRebuild()
+  if self.Display and self.Display.RequestRebuild then self.Display:RequestRebuild() end
+  if self.Tracker and self.Tracker.RequestRefresh then self.Tracker:RequestRefresh() end
 end
 
 function Addon:ResetDB()
-  local keepMinimap = (self.db and self.db.minimap) and U.DeepCopy(self.db.minimap) or nil
+  local keepMinimap = self.db and U.DeepCopy(U.SafeTable(self.db.minimap)) or nil
   RothSpellTrackerDB = NewDB()
   if keepMinimap then RothSpellTrackerDB.minimap = keepMinimap end
   self.db = RothSpellTrackerDB
+  SanitizeDB(self.db)
   self:UpdateMinimapIcon()
-  self.Display:ApplyLayout()
-  self.Tracker:RequestRefresh()
+  self:RequestRebuild()
   self:Log("INFO", "DB reset")
 end
 
 function Addon:ApplyFrameLock()
-  if self.Display and self.Display.ApplyLock then
-    self.Display:ApplyLock()
-  end
+  if self.Display and self.Display.ApplyLock then self.Display:ApplyLock() end
 end
 
--- Slash commands
-local function Slash(msg)
-  msg = U.Trim(msg or "")
-  if msg == "" then
+local function Slash(message)
+  message = U.Trim(message)
+  if message == "" or message == "config" then
     Addon:ToggleConfig()
     return
   end
 
-  local cmd, arg = msg:match("^(%S+)%s*(.-)$")
-  cmd = (cmd or ""):lower()
-
-  if cmd == "debug" then
-    local v = (arg == "1" or arg == "on" or arg == "true")
-    Addon:SetDebug(v)
-    Addon:Log("INFO", v and "Debug ON" or "Debug OFF")
-  elseif cmd == "lock" then
+  local command, argument = message:match("^(%S+)%s*(.-)$")
+  command = (command or ""):lower()
+  if command == "debug" then
+    local enabled = argument == "1" or argument == "on" or argument == "true"
+    Addon:SetDebug(enabled)
+    Addon:Log("INFO", enabled and "Debug ON" or "Debug OFF")
+  elseif command == "lock" then
     Addon.db.frame.locked = true
     Addon:ApplyFrameLock()
     Addon:Log("INFO", "Frame locked")
-  elseif cmd == "unlock" then
+  elseif command == "unlock" then
     Addon.db.frame.locked = false
     Addon:ApplyFrameLock()
     Addon:Log("INFO", "Frame unlocked")
-  elseif cmd == "log" then
-    Addon:DumpLog(tonumber(arg) or 50)
-  elseif cmd == "reset" then
+  elseif command == "log" then
+    Addon:DumpLog(U.ToNumber(argument) or 50)
+  elseif command == "reset" then
     Addon:ResetDB()
   else
-    Addon:Log("INFO", "Commands: /rst, /rst debug on|off, /rst lock|unlock, /rst log [N], /rst reset")
+    Addon:Log("INFO", "Commands: /rothspelltracker, /rspellt, /spelltracker; debug on|off; lock; unlock; log [N]; reset")
   end
 end
 
--- Events
-local E = CreateFrame("Frame")
-E:RegisterEvent("ADDON_LOADED")
-E:RegisterEvent("PLAYER_LOGIN")
-
-E:SetScript("OnEvent", function(_, event, a1, ...)
+local EventFrame = CreateFrame("Frame")
+EventFrame:RegisterEvent("ADDON_LOADED")
+EventFrame:RegisterEvent("PLAYER_LOGIN")
+EventFrame:SetScript("OnEvent", function(_, event, argument)
   if event == "ADDON_LOADED" then
-    if a1 ~= ADDON then return end
-
+    if argument ~= ADDON then return end
     Addon:InitLogger()
     Addon:InitDB()
     Addon:InitMinimapIcon()
     Addon:UpdateMinimapIcon()
 
-    -- slash
-    SLASH_ROTHSPELLTRACKER1 = "/rst"
-    SlashCmdList["ROTHSPELLTRACKER"] = Slash
-
+    SLASH_ROTHSPELLTRACKER1 = "/rothspelltracker"
+    SLASH_ROTHSPELLTRACKER2 = "/rspellt"
+    SLASH_ROTHSPELLTRACKER3 = "/spelltracker"
+    SlashCmdList.ROTHSPELLTRACKER = Slash
     Addon:Log("INFO", "Loaded v" .. Addon.VERSION)
   elseif event == "PLAYER_LOGIN" then
-    if Addon.Display and Addon.Display.Init then
-      Addon.Display:Init()
-    end
-    if Addon.Tracker and Addon.Tracker.Init then
-      Addon.Tracker:Init()
-      Addon.Tracker:RequestRefresh()
-    end
+    if Addon.Display and Addon.Display.Init then Addon.Display:Init() end
+    if Addon.ManagedAuras and Addon.ManagedAuras.Init then Addon.ManagedAuras:Init() end
+    if Addon.Tracker and Addon.Tracker.Init then Addon.Tracker:Init() end
+    Addon:RequestRebuild()
   end
 end)
