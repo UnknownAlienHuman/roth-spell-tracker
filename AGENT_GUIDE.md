@@ -1,76 +1,168 @@
-# RothSpellTracker agent guide
+# Roth Spell Tracker agent guide
 
 ## Start here
 
-Read [`RothSpellTracker.toc`](RothSpellTracker.toc), then [`Core/Config.lua`](Core/Config.lua), [`Core/Core.lua`](Core/Core.lua), [`Modules/Tracker.lua`](Modules/Tracker.lua), and [`Modules/Display.lua`](Modules/Display.lua). The TOC is the dependency contract: vendored libraries first, support/core next, display before tracker last. `libs/LibDBIcon-1.0/lib.xml` exists as a packaging descriptor but is inactive because the root TOC loads `LibDBIcon-1.0.lua` directly.
+Read, in order:
 
-TOC release metadata is `0.2.1` (`RothSpellTracker.toc`, `## Version`).
+1. [`RothSpellTracker.toc`](RothSpellTracker.toc)
+2. [`Core/Config.lua`](Core/Config.lua)
+3. [`Core/Util.lua`](Core/Util.lua)
+4. [`Core/Core.lua`](Core/Core.lua)
+5. [`Modules/Display.lua`](Modules/Display.lua)
+6. [`Modules/ManagedAuras.lua`](Modules/ManagedAuras.lua)
+7. [`Modules/Tracker.lua`](Modules/Tracker.lua)
+8. [`Core/ConfigUI.lua`](Core/ConfigUI.lua)
 
-## Load order and execution path
+Target contract:
 
-The TOC loads `LibStub`, `CallbackHandler-1.0`, `LibDataBroker-1.1`, and `LibDBIcon-1.0`; then `Config.lua`, `Logging.lua`, `Util.lua`, `Minimap.lua`, `ConfigUI.lua`, `Core.lua`; then `Display.lua` and `Tracker.lua`. All files share `NS.Addon`.
+- Retail / Midnight `12.1.0`;
+- Interface `120100`;
+- addon version `0.3.0`;
+- verified Blizzard source baseline `12.1.0.69497`;
+- required Blizzard dependency `Blizzard_AuraContainer`;
+- one SavedVariables root, `RothSpellTrackerDB`.
 
-Complete `loadedFiles` inventory (root `docs/addon-architecture.json`, in execution order):
+## Non-negotiable 12.1 boundary
+
+AURA tracks are display-only managed AuraContainer consumers. Never restore the former raw scanner.
+
+Forbidden runtime paths include:
 
 ```text
-libs/LibStub/LibStub.lua
-libs/CallbackHandler-1.0/CallbackHandler-1.0.lua
-libs/LibDataBroker-1.1/LibDataBroker-1.1.lua
-libs/LibDBIcon-1.0/LibDBIcon-1.0.lua
-Core/Config.lua
-Core/Logging.lua
-Core/Util.lua
-Core/Minimap.lua
-Core/ConfigUI.lua
-Core/Core.lua
-Modules/Display.lua
-Modules/Tracker.lua
+UNIT_AURA
+C_UnitAuras
+UnitAura
+AuraUtil.ForEachAura
+GetAuraDataByIndex
+GetAuraDataByAuraInstanceID
+raw AuraData caches
+managed AuraButton visibility/alpha/count/frame-count queries
+GetChildren / GetNumChildren for aura discovery
 ```
 
-`Core.lua` listens for `ADDON_LOADED` and `PLAYER_LOGIN`. For the addon load it runs `InitLogger` -> `InitDB` (default copy, v1-to-v2 migration, sanitization) -> `InitMinimapIcon`/`UpdateMinimapIcon` -> registers `/rst`. On login it initializes the display anchor and tracker, then queues a refresh. `Tracker:Refresh` builds only requested aura caches, evaluates SPELL/AURA entries, compacts shown rows, and calls `Display` methods.
+Each aura track must remain one `CustomAuraContainer` plus one `AddAuraSlot` with an `includeSpellIDs` candidate-filter map. The initialization callback may configure icon/count/cooldown/static child art; after initialization, do not retain or inspect the managed AuraButton.
 
-## State and surfaces
+Blizzard owns aura assignment, visibility, applications, duration, private/restricted state, sorting, refresh events, and candidate evaluation.
 
-- SavedVariables: `RothSpellTrackerDB`; schema `DB_VERSION = 2`. v1 `db.spells[spellID]` maps to v2 `db.tracks[]`.
-- Persistent fields: `version`, `debug`, `minimap.hide/minimapPos`, `frame.point/relPoint/x/y/size/spacing/locked/grow`, and track entries (`id`, `kind`, `enabled`, `showWhen`, plus spell `ignoreGCD` or aura `unit/auraType/minStacks`).
-- Slash commands: `/rst`, `/rst debug on|off`, `/rst lock|unlock`, `/rst log [N]`, `/rst reset`.
-- Workspace collision: `RothSecretTester` also registers `/rst` (see the root duplicate-slash index and [tracker issue #2](https://github.com/UnknownAlienHuman/roth-spell-tracker/issues/2)). If both addons are enabled, verify which handler is installed after both `ADDON_LOADED` paths run; do not assume `/rst` is uniquely owned by this addon.
-- Minimap: LDB data object `RothSpellTracker`, registered via LibDBIcon; left-click toggles config and right-click locks/unlocks.
-- Runtime entry points: `Addon:InitDB`, `Addon:ResetDB`, `Tracker:Init`, `Tracker:RequestRefresh`, `Tracker:Refresh`, `Display:Init`, `Display:SetCount`.
+## Track schema
 
-## Dependencies and relationships
+Schema v3 uses a stable numeric `uid` for runtime container ownership.
 
-All libraries are bundled in `libs/`; there are no TOC external dependencies. The addon consumes Blizzard aura/spell/cooldown APIs and creates its own `RothSpellTrackerAnchor` and pooled icon frames. `Modules/Display.lua` borrows Blizzard spell activation alert templates opportunistically but does not call another checked-in addon. No checked-in addon references RothSpellTracker globals.
+SPELL:
 
-Falsification notes: tracker code has no `COMBAT_LOG_EVENT_UNFILTERED` path, no Masque/CDM integration, and no permanent `OnUpdate`; the bundled LibDBIcon drag helper may use a short-lived frame update outside the tracker hot path.
+```text
+uid, id, kind=SPELL, enabled,
+showWhen=ALWAYS|READY|NOTREADY,
+ignoreGCD
+```
 
-## Change routing
+AURA:
 
-- DB schema/defaults/migration/sanitization: [`Core/Config.lua`](Core/Config.lua), [`Core/Core.lua`](Core/Core.lua); update `DB_VERSION` and migration together.
-- Secret-safe API wrappers: [`Core/Util.lua`](Core/Util.lua); keep all control-flow gates behind `SafeBool`, `SafeNumber`, and `CanAccess`.
-- Event-driven calculation, aura indexing, GCD/charges rules: [`Modules/Tracker.lua`](Modules/Tracker.lua).
-- Frame pool, layout, cooldown, glow, drag/lock: [`Modules/Display.lua`](Modules/Display.lua).
-- Track editor and global controls: [`Core/ConfigUI.lua`](Core/ConfigUI.lua); mutate DB then request tracker refresh.
-- Logs/minimap: [`Core/Logging.lua`](Core/Logging.lua), [`Core/Minimap.lua`](Core/Minimap.lua).
+```text
+uid, id, kind=AURA, enabled,
+showWhen=ALWAYS|ACTIVE,
+unit=player|target|focus,
+auraType=HELPFUL|HARMFUL
+```
 
-## Invariants and risks
+Do not reintroduce `minStacks` or `INACTIVE`. Missing-only and stack-threshold behavior require observing managed aura state and are not a safe general-purpose 12.1 feature. Migration maps old `INACTIVE` to `ALWAYS` and removes stack thresholds.
 
-- The tracker has no permanent `OnUpdate`; every refresh is coalesced with `C_Timer.After(0)`. The bundled `LibDBIcon-1.0` may install its own short-lived drag-helper `OnUpdate`, which is outside the tracker hot path. Do not add per-frame scans to tracker code.
-- `UNIT_AURA` is limited to `player`, `target`, and `focus`; aura caches are built only for configured unit/filter combinations.
-- Secret booleans/numbers must never be used directly in `if`, arithmetic, or comparisons. Preserve `U.SafeBool`, `U.SafeNumber`, `U.CanAccess`, and `U.SafeSetShown` boundaries.
-- Tracker config only accepts `SPELL`/`AURA`, known units, and `HELPFUL`/`HARMFUL`; duplicate `(kind,id)` entries are collapsed by sanitization/UI.
-- Moving the anchor is blocked in combat; cooldown/glow frames are addon-owned, but `CreateFrame` with Blizzard alert templates can vary by build.
-- Unknown SavedVariables schema is intentionally reset while preserving minimap data; do not silently reinterpret new schema fields.
+## Access-first spell handling
+
+All game-returned spell values go through `Core/Util.lua`:
+
+- `U.CanAccess` before treating a value as ordinary;
+- `U.SafeBool`, `SafeNumber`, `SafeString`, `SafeTable` for control-flow data;
+- `U.GetSpellName`, `GetSpellIcon`, `IsSpellKnown`, `IsUsableSpell`, `GetSpellCooldown`, `GetSpellCharges` for API boundaries;
+- `U.SafeToString` for diagnostics.
+
+Do not call `type`, compare, branch, perform arithmetic, index, format, concatenate, log, cache, or persist a raw game value before the access decision.
+
+`pcall` contains API errors; it does not authorize inspecting returned data.
+
+## GCD rule
+
+A SPELL track may ignore a cooldown only when:
+
+```lua
+track.ignoreGCD ~= false and cooldown.isOnGCD == true
+```
+
+`isOnGCD` must be an accessible ordinary boolean returned by the wrapper. Duration, start time, specialization, or historical thresholds are not legal substitutes. Unknown classification fails closed as a real cooldown.
+
+## Stable layout and combat
+
+`Modules/Display.lua` reserves one slot for every enabled track in DB order. Dynamic spell readiness and managed aura assignment never compact or reorder slots.
+
+Frame/container creation, managed-slot reconfiguration, anchor changes, sizing, and layout rebuilds must not occur in combat. `Display.pendingRebuild` defers the latest configuration to `PLAYER_REGEN_ENABLED`.
+
+Spell visual regions and glow are precreated during rebuild. Do not create a glow or template on first activation during combat.
+
+AURA `ALWAYS` is implemented with a static dim placeholder behind the managed button. The placeholder never reads managed state. `ACTIVE` simply hides the placeholder; the stable slot remains.
+
+## Module routing
+
+- `Core/Config.lua`: schema/version/defaults only.
+- `Core/Util.lua`: access gates and sanitized spell API wrappers.
+- `Core/Logging.lua`: bounded 250-line ordinary-text ring.
+- `Core/Core.lua`: DB migration/sanitization, lifecycle, slash ownership, reset/rebuild boundary.
+- `Core/Minimap.lua`: LDB/DBIcon object only.
+- `Core/ConfigUI.lua`: supported track editor and global controls.
+- `Modules/Display.lua`: anchor, stable slots, spell visuals, layout/lock/position, combat deferral.
+- `Modules/ManagedAuras.lua`: managed container/slot lifecycle and target/focus refresh.
+- `Modules/Tracker.lua`: SPELL-only event/evaluation path.
+
+## Slash ownership
+
+Do not restore `/rst`. Roth Secret Tester owns that alias. Valid tracker aliases are:
+
+```text
+/rothspelltracker
+/rspellt
+/spelltracker
+```
+
+## Performance invariants
+
+- no permanent `OnUpdate` in tracker code;
+- no addon aura event or aura scan;
+- no frame-tree scan;
+- spell event bursts coalesce to one zero-delay refresh;
+- target/focus changes call `UpdateAllAuras` only on matching managed containers;
+- no runtime layout compaction based on state;
+- DB track count remains capped at 500;
+- logger remains a bounded ring.
 
 ## Verification
 
-1. Verify TOC load order and every referenced file.
-2. Parse Lua and run the repository Markdown/link checks.
-3. In-game `/reload`; verify `/rst`, LDB left/right-click, and Settings editor add/edit/remove/reorder.
-4. Test AURA entries on player/target/focus with both filters and stack thresholds; test SPELL entries with known/unknown, charges, GCD and real cooldown.
-5. Drag/lock/reset anchor out of combat; confirm debug log and minimap hide persist after reload.
-6. Exercise `UNIT_AURA`, `SPELL_UPDATE_COOLDOWN`, `SPELL_UPDATE_CHARGES`, `SPELLS_CHANGED`, target/focus changes, and combat transitions without Lua/taint errors.
+Local checks:
 
-## Uncertain or version-sensitive claims
+```text
+texlua --luaconly Core/*.lua
+texlua --luaconly Modules/*.lua
+texlua --luaconly tests/*.lua
+texlua tests/test_managed_aura_12_1.lua
+texlua tests/test_spell_state_12_1.lua
+```
 
-`C_UnitAuras`, `C_Spell`, legacy spell APIs, and the available spell-activation alert template names vary by client build. The wrappers intentionally fall back, but actual 12.0.x behavior and visual templates require live-client smoke testing.
+Expected results:
+
+```text
+PASS: AURA tracks use managed AddAuraSlot sinks without raw aura reads or combat-time frame creation
+PASS: SPELL tracks ignore only explicit GCD evidence and fail closed on inaccessible cooldown/charge/usability values
+```
+
+Static review must find no raw aura API/event paths in addon runtime and no literal `/rst` registration.
+
+Live-client gates:
+
+- fresh v1/v2/v3 SavedVariables and reload;
+- add/edit/remove/reorder SPELL and AURA tracks;
+- player/target/focus helpful/harmful relationship combinations;
+- target/focus identity changes;
+- active/missing aura transitions and count/duration sinks;
+- known/unknown/overridden spells, charges, explicit GCD and real cooldowns;
+- configuration changes during combat and one post-combat rebuild;
+- no taint, forbidden-object, secret-value, repeating error, or performance regression.
+
+Mocked/static success does not prove live managed-template, relationship-filter, or restricted-object behavior. Record the exact build and context for all client evidence.
