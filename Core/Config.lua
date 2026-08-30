@@ -3,14 +3,12 @@ NS = NS or {}
 NS.Addon = NS.Addon or {}
 local Addon = NS.Addon
 
-Addon.VERSION = "0.2.1"
--- SavedVariables schema version.
--- v1: db.spells map keyed by spellID
--- v2: db.tracks array of entries (supports unlimited rows + stable ordering)
-Addon.DB_VERSION = 2
+Addon.VERSION = "0.3.0"
+Addon.DB_VERSION = 3
 
 Addon.Defaults = {
   version = Addon.DB_VERSION,
+  nextUID = 1,
   debug = false,
 
   minimap = {
@@ -26,20 +24,21 @@ Addon.Defaults = {
     size = 44,
     spacing = 6,
     locked = true,
-    grow = "RIGHT", -- RIGHT/LEFT/UP/DOWN
+    grow = "RIGHT",
   },
 
   tracks = {
-    -- array of entries (stable order)
-    -- {
-    --   id = 47528,
-    --   kind = "SPELL" | "AURA",
-    --   enabled = true,
-    --   showWhen = "ALWAYS" | "READY" | "NOTREADY" | "ACTIVE" | "INACTIVE",
-    --   ignoreGCD = true,          -- SPELL only
-    --   unit = "player",          -- AURA only
-    --   auraType = "HELPFUL",     -- AURA only
-    --   minStacks = 0,             -- AURA only
-    -- }
+    -- Stable ordered array. Each entry owns a durable numeric uid.
+    -- SPELL:
+    -- { uid, id, kind="SPELL", enabled=true,
+    --   showWhen="ALWAYS"|"READY"|"NOTREADY", ignoreGCD=true }
+    -- AURA:
+    -- { uid, id, kind="AURA", enabled=true,
+    --   showWhen="ALWAYS"|"ACTIVE", unit="player"|"target"|"focus",
+    --   auraType="HELPFUL"|"HARMFUL" }
+    --
+    -- AURA state is rendered only through Blizzard CustomAuraContainer slots.
+    -- Missing-only and stack-threshold inference are intentionally unsupported
+    -- because they require observing managed aura assignment/state.
   },
 }
