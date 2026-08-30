@@ -1,13 +1,16 @@
-# Code index
+# Roth Spell Tracker code index
 
-| Area | Files | Exact anchors |
-| --- | --- | --- |
-| Startup/DB | [`Core/Core.lua`](Core/Core.lua), [`Core/Config.lua`](Core/Config.lua) | `Addon:InitDB`, `MigrateV1toV2`, `SanitizeDB`, `Slash`, `Addon:ResetDB` |
-| Secret-safe helpers | [`Core/Util.lua`](Core/Util.lua) | `U.IsSecret`, `U.CanAccess`, `U.SafeBool`, `U.SafeNumber`, spell wrappers |
-| Support | [`Core/Logging.lua`](Core/Logging.lua), [`Core/Minimap.lua`](Core/Minimap.lua) | `Addon:Log`, `Addon:DumpLog`, `Addon:InitMinimapIcon` |
-| Configuration UI | [`Core/ConfigUI.lua`](Core/ConfigUI.lua) | `UI:Create`, `UI:SaveEntryFromForm`, `UI:Refresh`, `UI:MoveEntry`, `Addon:ToggleConfig` |
-| Tracking | [`Modules/Tracker.lua`](Modules/Tracker.lua) | `T:Init`, `T:RequestRefresh`, `T:Refresh`, `EvalSpell`, `EvalAura` |
-| Rendering | [`Modules/Display.lua`](Modules/Display.lua) | `D:Init`, `D:GetIcon`, `D:SetCount`, `D:SetIconGlow`, cooldown updates |
-| Vendored libraries | [`libs/`](libs/) | LibStub, CallbackHandler, LDB, DBIcon |
+| Area | Files | Current owners |
+|---|---|---|
+| Metadata/load order | `RothSpellTracker.toc` | Interface `120100`, Blizzard_AuraContainer dependency, exact runtime order |
+| Schema and migration | `Core/Config.lua`, `Core/Core.lua` | DB v3, stable `uid`, v1/v2 migration, bounded sanitize/reset |
+| Access boundary | `Core/Util.lua` | `CanAccess`, safe scalar/table gates, sanitized spell name/icon/known/usable/cooldown/charge wrappers |
+| Diagnostics/minimap | `Core/Logging.lua`, `Core/Minimap.lua` | bounded ordinary-text ring and LDB/DBIcon object |
+| Configuration | `Core/ConfigUI.lua` | add/edit/remove/reorder, supported SPELL/AURA fields, size/spacing/grow/lock/minimap controls |
+| Stable presentation | `Modules/Display.lua` | anchor, one reserved slot per enabled track, spell visual children, position/layout/lock, combat-deferred rebuild |
+| Managed AURA tracks | `Modules/ManagedAuras.lua` | one CustomAuraContainer/AddAuraSlot per aura UID, display sinks, candidate filters, target/focus refresh |
+| SPELL evaluation | `Modules/Tracker.lua` | coalesced spell events, explicit-GCD-only cooldown suppression, charge/readiness evaluation |
+| Regression | `tests/test_managed_aura_12_1.lua`, `tests/test_spell_state_12_1.lua` | managed-slot/no-raw-aura contract and inaccessible spell/GCD contract |
+| Vendored libraries | `Libs/` | LibStub, CallbackHandler, LibDataBroker, LibDBIcon |
 
-Entry is TOC/lifecycle-driven; `/rst` is registered only after `ADDON_LOADED` for this addon.
+Roth Spell Tracker does not own `/rst`; use `/rothspelltracker`, `/rspellt`, or `/spelltracker`.
