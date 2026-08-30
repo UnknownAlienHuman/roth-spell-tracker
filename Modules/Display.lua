@@ -7,316 +7,291 @@ local U = Addon.Util
 Addon.Display = Addon.Display or {}
 local D = Addon.Display
 
-local function SetCooldown(cd, startTime, duration)
-  if not cd then return end
-  if CooldownFrame_Set then
-    CooldownFrame_Set(cd, startTime or 0, duration or 0, true)
-    return
+local QUESTION_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
+
+local function SetCooldown(cooldown, startTime, duration)
+  if not cooldown then return end
+  startTime = U.SafeNumber(startTime)
+  duration = U.SafeNumber(duration)
+  if not startTime or not duration or duration <= 0.05 then
+    startTime, duration = 0, 0
   end
-  if cd.SetCooldown then
-    cd:SetCooldown(startTime or 0, duration or 0)
+  if type(cooldown.SetCooldown) == "function" then
+    cooldown:SetCooldown(startTime, duration)
+  elseif type(CooldownFrame_Set) == "function" then
+    CooldownFrame_Set(cooldown, startTime, duration, true)
   end
 end
 
--- Blizzard-style proc glow overlay (SpellActivationAlert templates).
--- This is intentionally copied in spirit from InterruptGlow (same author) to be:
---  * resilient to template name differences
---  * safe to call on addon-owned frames
-local PROC_TEMPLATES = {
-  "ActionButtonSpellAlertTemplate",
-  "ActionBarButtonSpellActivationAlert",
-  "ActionButtonSpellActivationAlert",
-  "SpellActivationAlertTemplate",
-  "SpellActivationAlert",
-}
+local function CreateSpellVisual(slot)
+  local visual = CreateFrame("Frame", nil, slot)
+  visual:SetAllPoints(slot)
 
-local function EnsureGlow(frame)
-  if not frame or not CreateFrame then return nil end
-  if frame.__RST_Alert then return frame.__RST_Alert end
-  if frame.IsForbidden and frame:IsForbidden() then return nil end
+  visual.icon = visual:CreateTexture(nil, "ARTWORK")
+  visual.icon:SetAllPoints(visual)
+  visual.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  visual.icon:SetTexture(QUESTION_ICON)
 
-  local w, h = 0, 0
-  if frame.GetSize then w, h = frame:GetSize() end
+  visual.cooldown = CreateFrame("Cooldown", nil, visual, "CooldownFrameTemplate")
+  visual.cooldown:SetAllPoints(visual)
 
-  for i = 1, #PROC_TEMPLATES do
-    local tmpl = PROC_TEMPLATES[i]
-    local ok, alert = pcall(CreateFrame, "Frame", nil, frame, tmpl)
-    if ok and alert then
-      if w and h and w > 0 and h > 0 then
-        alert:SetSize(w * 1.4, h * 1.4)
-      else
-        alert:SetAllPoints(frame)
-      end
-      alert:SetPoint("CENTER", frame, "CENTER", 0, 0)
-      alert:SetFrameStrata("HIGH")
-      alert:SetFrameLevel((frame.GetFrameLevel and frame:GetFrameLevel() or 0) + 50)
-      alert:Hide()
+  visual.count = visual:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+  visual.count:SetPoint("BOTTOMRIGHT", visual, "BOTTOMRIGHT", -2, 2)
+  visual.count:SetText("")
 
-      frame.__RST_Alert = alert
-      return alert
-    end
-  end
+  visual.border = visual:CreateTexture(nil, "OVERLAY")
+  visual.border:SetAllPoints(visual)
+  visual.border:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+  visual.border:SetBlendMode("ADD")
+  visual.border:SetAlpha(0.45)
 
-  return nil
-end
+  visual.glow = visual:CreateTexture(nil, "OVERLAY", nil, 2)
+  visual.glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+  visual.glow:SetBlendMode("ADD")
+  visual.glow:SetPoint("CENTER", visual, "CENTER", 0, 0)
+  visual.glow:SetSize(1, 1)
+  visual.glow:SetAlpha(0.9)
+  visual.glow:Hide()
 
-local function HookAlertAnims(alert)
-  if not alert or alert.__RST_AnimHooked or not alert.HookScript then return end
-  alert.__RST_AnimHooked = true
-
-  local function SafePlay(obj)
-    if obj and obj.Play then pcall(obj.Play, obj) end
-  end
-  local function SafeStop(obj)
-    if obj and obj.Stop then pcall(obj.Stop, obj) end
-  end
-
-  local function StartProc(self)
-    local start = self.ProcStartAnim or self.procStartAnim or self.AnimIn or self.animIn
-    local loop  = self.ProcLoopAnim  or self.procLoopAnim  or self.AnimLoop or self.animLoop
-
-    local startFB = self.ProcStartFlipbook or self.procStartFlipbook
-    local loopFB  = self.ProcLoopFlipbook  or self.procLoopFlipbook
-    local loopFB2 = self.ProcLoopFlipbook2 or self.procLoopFlipbook2
-    local loopFB3 = self.ProcLoopFlipbook3 or self.procLoopFlipbook3
-
-    local out = self.ProcEndAnim or self.procEndAnim or self.AnimOut or self.animOut
-    if out and out.IsPlaying and out:IsPlaying() then pcall(out.Stop, out) end
-
-    SafePlay(start or startFB)
-    SafePlay(loop or loopFB)
-    SafePlay(loopFB2)
-    SafePlay(loopFB3)
-  end
-
-  local function StopProc(self)
-    local out = self.ProcEndAnim or self.procEndAnim or self.AnimOut or self.animOut
-    if out and out.Play then
-      pcall(out.Play, out)
-      return
-    end
-
-    SafeStop(self.ProcStartAnim or self.procStartAnim or self.AnimIn or self.animIn)
-    SafeStop(self.ProcLoopAnim  or self.procLoopAnim  or self.AnimLoop or self.animLoop)
-    SafeStop(self.ProcStartFlipbook or self.procStartFlipbook)
-    SafeStop(self.ProcLoopFlipbook  or self.procLoopFlipbook)
-    SafeStop(self.ProcLoopFlipbook2 or self.procLoopFlipbook2)
-    SafeStop(self.ProcLoopFlipbook3 or self.procLoopFlipbook3)
-  end
-
-  alert:HookScript("OnShow", StartProc)
-  alert:HookScript("OnHide", StopProc)
-end
-
-local function SetGlow(frame, enabled)
-  local alert = EnsureGlow(frame)
-  if not alert then return end
-  HookAlertAnims(alert)
-  alert:SetShown(enabled == true)
+  visual:Hide()
+  return visual
 end
 
 function D:Init()
   if self.anchor then
-    self:ApplyLayout()
-    self:ApplyLock()
+    self:RequestRebuild()
     return
   end
 
-  local f = CreateFrame("Frame", "RothSpellTrackerAnchor", UIParent)
-  f:SetSize(200, 60)
-  f:SetFrameStrata("MEDIUM")
-  f:SetClampedToScreen(true)
+  self.slots = {}
+  self.order = {}
+  self.pendingRebuild = false
 
-  self.anchor = f
-  self.icons = {}
+  local anchor = CreateFrame("Frame", "RothSpellTrackerAnchor", UIParent)
+  anchor:SetSize(64, 64)
+  anchor:SetFrameStrata("MEDIUM")
+  anchor:SetClampedToScreen(true)
+  anchor:SetMovable(true)
+  anchor:RegisterForDrag("LeftButton")
+  self.anchor = anchor
 
-  f.bg = f:CreateTexture(nil, "BACKGROUND")
-  f.bg:SetAllPoints(true)
-  f.bg:SetColorTexture(0, 0, 0, 0.25)
+  anchor.background = anchor:CreateTexture(nil, "BACKGROUND")
+  anchor.background:SetAllPoints(anchor)
+  anchor.background:SetColorTexture(0, 0, 0, 0.25)
 
-  f.label = f:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-  f.label:SetPoint("CENTER")
-  f.label:SetText("Roth Spell Tracker")
+  anchor.label = anchor:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+  anchor.label:SetPoint("CENTER")
+  anchor.label:SetText("Roth Spell Tracker")
 
-  f:SetMovable(true)
-  f:EnableMouse(true)
-  f:RegisterForDrag("LeftButton")
-  f:SetScript("OnDragStart", function()
+  anchor:SetScript("OnDragStart", function(selfFrame)
     if Addon.db.frame.locked then return end
-    if InCombatLockdown and InCombatLockdown() then
+    if InCombatLockdown() then
       Addon:Log("WARN", "Cannot move in combat")
       return
     end
-    f:StartMoving()
+    selfFrame:StartMoving()
   end)
-  f:SetScript("OnDragStop", function()
-    f:StopMovingOrSizing()
+
+  anchor:SetScript("OnDragStop", function(selfFrame)
+    selfFrame:StopMovingOrSizing()
     D:SavePosition()
   end)
 
-  self:ApplyLayout()
-  self:ApplyLock()
+  local events = CreateFrame("Frame")
+  events:RegisterEvent("PLAYER_REGEN_ENABLED")
+  events:SetScript("OnEvent", function()
+    if D.pendingRebuild then D:Rebuild() end
+  end)
+  self.events = events
+
+  self:RequestRebuild()
 end
 
 function D:SavePosition()
-  if not self.anchor then return end
-  local p, _, rp, x, y = self.anchor:GetPoint(1)
-  if not p then return end
-  local dbf = Addon.db.frame
-  dbf.point = p
-  dbf.relPoint = rp
-  dbf.x = math.floor((x or 0) + 0.5)
-  dbf.y = math.floor((y or 0) + 0.5)
+  if not self.anchor or InCombatLockdown() then return end
+  local point, _, relativePoint, x, y = self.anchor:GetPoint(1)
+  point = U.SafeString(point)
+  relativePoint = U.SafeString(relativePoint)
+  x = U.SafeNumber(x)
+  y = U.SafeNumber(y)
+  if not point or not relativePoint or not x or not y then return end
+
+  local frame = Addon.db.frame
+  frame.point = point
+  frame.relPoint = relativePoint
+  frame.x = math.floor(x + 0.5)
+  frame.y = math.floor(y + 0.5)
 end
 
 function D:ResetPosition()
-  local dbf = Addon.db and Addon.db.frame
-  if not dbf then return end
-  dbf.point = "CENTER"
-  dbf.relPoint = "CENTER"
-  dbf.x = 0
-  dbf.y = -120
-  self:ApplyLayout()
-end
-
-function D:ApplyLayout()
-  if not self.anchor then return end
-  local dbf = Addon.db.frame
-
-  self.anchor:ClearAllPoints()
-  self.anchor:SetPoint(dbf.point, UIParent, dbf.relPoint, dbf.x, dbf.y)
-
-  local size = dbf.size or 44
-  local spacing = dbf.spacing or 6
-
-  -- layout icons
-  local grow = dbf.grow or "RIGHT"
-
-  local ox, oy = 0, 0
-  local dx, dy = 1, 0
-  if grow == "LEFT" then dx = -1; dy = 0
-  elseif grow == "UP" then dx = 0; dy = 1
-  elseif grow == "DOWN" then dx = 0; dy = -1 end
-
-  local count = self.count or #self.icons
-  for i = 1, count do
-    local ic = self.icons[i]
-    ic:SetSize(size, size)
-    ic:ClearAllPoints()
-    ic:SetPoint("CENTER", self.anchor, "CENTER",
-      ox + (i - 1) * dx * (size + spacing),
-      oy + (i - 1) * dy * (size + spacing)
-    )
-  end
-
-  -- anchor extents (approx)
-  count = math.max(1, count)
-  local w = size + (dx ~= 0 and (count - 1) * (size + spacing) or 0)
-  local h = size + (dy ~= 0 and (count - 1) * (size + spacing) or 0)
-  self.anchor:SetSize(w + 20, h + 20)
+  if not Addon.db or not Addon.db.frame then return end
+  Addon.db.frame.point = "CENTER"
+  Addon.db.frame.relPoint = "CENTER"
+  Addon.db.frame.x = 0
+  Addon.db.frame.y = -120
+  self:RequestRebuild()
 end
 
 function D:ApplyLock()
   if not self.anchor then return end
+  if InCombatLockdown() then
+    self.pendingRebuild = true
+    return
+  end
   local locked = Addon.db.frame.locked == true
-  self.anchor.bg:SetShown(not locked)
+  self.anchor.background:SetShown(not locked)
   self.anchor.label:SetShown(not locked)
   self.anchor:EnableMouse(not locked)
 end
 
-function D:GetIcon(i)
-  local ic = self.icons[i]
-  if ic then return ic end
+function D:EnsureSlot(track)
+  local uid = U.SafeNumber(track.uid)
+  if not uid then return nil end
+  local slot = self.slots[uid]
+  if slot then return slot end
+  if InCombatLockdown() then
+    self.pendingRebuild = true
+    return nil
+  end
 
-  ic = CreateFrame("Frame", nil, self.anchor)
-  ic:SetSize(Addon.db.frame.size or 44, Addon.db.frame.size or 44)
-  ic:SetFrameStrata("HIGH")
-
-  ic.tex = ic:CreateTexture(nil, "ARTWORK")
-  ic.tex:SetAllPoints(true)
-  ic.tex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-
-  ic.count = ic:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
-  ic.count:SetPoint("BOTTOMRIGHT", ic, "BOTTOMRIGHT", -2, 2)
-  ic.count:SetText("")
-
-  ic.cooldown = CreateFrame("Cooldown", nil, ic, "CooldownFrameTemplate")
-  ic.cooldown:SetAllPoints(true)
-
-  ic.border = ic:CreateTexture(nil, "OVERLAY")
-  ic.border:SetAllPoints(true)
-  ic.border:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
-  ic.border:SetBlendMode("ADD")
-  ic.border:SetAlpha(0.75)
-
-  ic:SetAlpha(1)
-  ic.__RST_Glow = false
-
-  ic:SetShown(false)
-  self.icons[i] = ic
-  return ic
+  slot = CreateFrame("Frame", nil, self.anchor)
+  slot.uid = uid
+  slot.spell = CreateSpellVisual(slot)
+  slot:Hide()
+  self.slots[uid] = slot
+  return slot
 end
 
-function D:SetIconGlow(i, active)
-  local ic = self.icons[i]
-  if not ic then return end
-  if active == ic.__RST_Glow then return end
-  ic.__RST_Glow = active == true
-  SetGlow(ic, ic.__RST_Glow)
+function D:GetSlot(uid)
+  uid = U.SafeNumber(uid)
+  return uid and self.slots and self.slots[uid] or nil
 end
 
-function D:SetIconAlpha(i, alpha)
-  local ic = self.icons[i]
-  if not ic or not ic.SetAlpha then return end
-  if type(alpha) ~= "number" then alpha = 1 end
-  ic:SetAlpha(alpha)
+function D:ApplyLayout()
+  if not self.anchor or InCombatLockdown() then
+    self.pendingRebuild = true
+    return false
+  end
+
+  local frame = Addon.db.frame
+  self.anchor:ClearAllPoints()
+  self.anchor:SetPoint(frame.point, UIParent, frame.relPoint, frame.x, frame.y)
+
+  local size = frame.size
+  local spacing = frame.spacing
+  local grow = frame.grow
+  local dx, dy = 1, 0
+  if grow == "LEFT" then dx = -1
+  elseif grow == "UP" then dx, dy = 0, 1
+  elseif grow == "DOWN" then dx, dy = 0, -1 end
+
+  for index, uid in ipairs(self.order) do
+    local slot = self.slots[uid]
+    if slot then
+      slot:SetSize(size, size)
+      slot:ClearAllPoints()
+      slot:SetPoint(
+        "CENTER",
+        self.anchor,
+        "CENTER",
+        (index - 1) * dx * (size + spacing),
+        (index - 1) * dy * (size + spacing)
+      )
+      if slot.spell and slot.spell.glow then
+        slot.spell.glow:SetSize(size * 1.4, size * 1.4)
+      end
+      slot:Show()
+    end
+  end
+
+  local count = math.max(1, #self.order)
+  local width = size + (dx ~= 0 and (count - 1) * (size + spacing) or 0)
+  local height = size + (dy ~= 0 and (count - 1) * (size + spacing) or 0)
+  self.anchor:SetSize(width + 20, height + 20)
+  self:ApplyLock()
+  return true
 end
 
-function D:UpdateIconCount(i, n)
-  local ic = self.icons[i]
-  if not ic or not ic.count then return end
-  if type(n) == "number" and n > 1 then
-    ic.count:SetText(tostring(n))
+function D:Rebuild()
+  if not self.anchor or not Addon.db then return false end
+  if InCombatLockdown() then
+    self.pendingRebuild = true
+    return false
+  end
+
+  self.pendingRebuild = false
+  local seen = {}
+  local order = {}
+  for _, track in ipairs(Addon.db.tracks or {}) do
+    if type(track) == "table" and track.enabled ~= false then
+      local slot = self:EnsureSlot(track)
+      if slot then
+        local uid = track.uid
+        seen[uid] = true
+        order[#order + 1] = uid
+        slot.trackKind = track.kind
+        if track.kind == "AURA" then
+          slot.spell:Hide()
+          if Addon.ManagedAuras then Addon.ManagedAuras:Attach(track, slot) end
+        else
+          if Addon.ManagedAuras then Addon.ManagedAuras:Disable(uid) end
+          slot.spell:Show()
+        end
+      end
+    end
+  end
+
+  for uid, slot in pairs(self.slots) do
+    if not seen[uid] then
+      slot:Hide()
+      slot.spell:Hide()
+      if Addon.ManagedAuras then Addon.ManagedAuras:Disable(uid) end
+    end
+  end
+
+  self.order = order
+  return self:ApplyLayout()
+end
+
+function D:RequestRebuild()
+  if not self.anchor then return end
+  if InCombatLockdown() then
+    self.pendingRebuild = true
+    return
+  end
+  self:Rebuild()
+end
+
+function D:UpdateSpell(track, state)
+  local slot = self:GetSlot(track.uid)
+  if not slot or slot.trackKind ~= "SPELL" then
+    self:RequestRebuild()
+    return
+  end
+
+  local visual = slot.spell
+  local active = state.active == true
+  local showWhen = track.showWhen or "ALWAYS"
+  local shown
+  if showWhen == "READY" then
+    shown = active
+  elseif showWhen == "NOTREADY" then
+    shown = not active
   else
-    ic.count:SetText("")
+    shown = true
   end
-end
 
-function D:UpdateIconCooldown(i, startTime, duration)
-  local ic = self.icons[i]
-  if not ic or not ic.cooldown then return end
+  local texture = state.icon or U.GetSpellIcon(track.id) or QUESTION_ICON
+  visual.icon:SetTexture(texture)
+  visual:SetShown(shown)
+  visual:SetAlpha(showWhen == "ALWAYS" and (active and 1 or 0.35) or 1)
+  visual.glow:SetShown(active)
 
-  if type(startTime) == "number" and type(duration) == "number" and duration > 0.05 then
-    SetCooldown(ic.cooldown, startTime, duration)
+  local count = U.SafeNumber(state.count)
+  if count and count > 1 then
+    visual.count:SetText(tostring(math.floor(count + 0.5)))
   else
-    SetCooldown(ic.cooldown, 0, 0)
+    visual.count:SetText("")
   end
-end
-
-function D:UpdateIconTexture(i, tex)
-  local ic = self.icons[i]
-  if not ic or not ic.tex then return end
-  if tex then ic.tex:SetTexture(tex) end
-end
-
-function D:SetIconShown(i, shown)
-  local ic = self.icons[i]
-  if not ic then return end
-  U.SafeSetShown(ic, shown)
-end
-
-function D:SetCount(n)
-  self.count = tonumber(n) or 0
-  if self.count < 0 then self.count = 0 end
-  -- ensure pool size
-  for i = #self.icons + 1, self.count do
-    self:GetIcon(i)
-  end
-
-  -- hide the rest
-  for i = self.count + 1, #self.icons do
-    self:SetIconShown(i, false)
-  end
-
-  self:ApplyLayout()
+  SetCooldown(visual.cooldown, state.cooldownStart, state.cooldownDuration)
 end
