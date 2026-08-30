@@ -2,11 +2,14 @@ local ADDON, NS = ...
 NS = NS or {}
 NS.Addon = NS.Addon or {}
 local Addon = NS.Addon
+local U = Addon.Util
 
 local DEFAULT_CAP = 250
 
 local function Now()
-  return date("%H:%M:%S")
+  if type(date) ~= "function" then return "--:--:--" end
+  local ok, value = pcall(date, "%H:%M:%S")
+  return ok and U.SafeString(value) or "--:--:--"
 end
 
 function Addon:InitLogger()
@@ -17,7 +20,7 @@ end
 
 function Addon:SetDebug(enabled)
   if self.db then
-    self.db.debug = enabled and true or false
+    self.db.debug = enabled == true
   end
 end
 
@@ -25,12 +28,11 @@ function Addon:IsDebug()
   return self.db and self.db.debug == true
 end
 
-function Addon:Log(level, msg)
-  if not msg then return end
-  level = level or "INFO"
-  local line = ("[%s] %s: %s"):format(Now(), level, tostring(msg))
+function Addon:Log(level, message)
+  local safeLevel = U.SafeString(level) or "INFO"
+  local safeMessage = U.SafeToString(message, "<unavailable>")
+  local line = string.format("[%s] %s: %s", Now(), safeLevel, safeMessage)
 
-  -- ring buffer
   local n = (self._logN or 0) + 1
   self._logN = n
   self._log[(n - 1) % (self._logCap or DEFAULT_CAP) + 1] = line
@@ -41,24 +43,21 @@ function Addon:Log(level, msg)
 end
 
 function Addon:DumpLog(maxLines)
-  maxLines = tonumber(maxLines) or 50
+  maxLines = U.SafeNumber(maxLines) or 50
   if maxLines < 1 then maxLines = 1 end
-  if maxLines > (self._logCap or DEFAULT_CAP) then maxLines = (self._logCap or DEFAULT_CAP) end
-
-  local out = {}
-  local n = self._logN or 0
   local cap = self._logCap or DEFAULT_CAP
-  local start = math.max(1, n - maxLines + 1)
+  if maxLines > cap then maxLines = cap end
 
-  for i = start, n do
-    local idx = (i - 1) % cap + 1
-    out[#out + 1] = self._log[idx]
-  end
-
+  local n = self._logN or 0
+  local startIndex = math.max(1, n - maxLines + 1)
   if DEFAULT_CHAT_FRAME then
     DEFAULT_CHAT_FRAME:AddMessage("|cff66c0ffRothSpellTracker|r ---- log ----")
-    for i = 1, #out do
-      DEFAULT_CHAT_FRAME:AddMessage("|cff66c0ffRothSpellTracker|r " .. out[i])
+    for sequence = startIndex, n do
+      local index = (sequence - 1) % cap + 1
+      local line = self._log[index]
+      if U.SafeString(line) then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff66c0ffRothSpellTracker|r " .. line)
+      end
     end
   end
 end
