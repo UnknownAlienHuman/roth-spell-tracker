@@ -1,18 +1,31 @@
-# Code graph
+# Roth Spell Tracker code graph
 
 ```mermaid
 flowchart LR
-  TOC[TOC load order] --> Libs[Bundled libraries]
-  Libs --> Core[Core/Core.lua]
-  Core --> DB[RothSpellTrackerDB v2]
-  Core --> UI[Core/ConfigUI.lua]
+  T["RothSpellTracker.toc"] --> L["bundled LDB/DBIcon libraries"]
+  T --> C["Core/Core.lua"]
+  T --> D["Modules/Display.lua"]
+  T --> A["Modules/ManagedAuras.lua"]
+  T --> S["Modules/Tracker.lua"]
+  C --> DB[("RothSpellTrackerDB v3")]
+  C --> U["Core/Util.lua access boundary"]
+  C --> UI["Core/ConfigUI.lua"]
   UI --> DB
-  UI --> Refresh[Tracker:RequestRefresh]
-  Events[ADDON_LOADED / PLAYER_LOGIN] --> Core
-  Events --> Tracker[Modules/Tracker.lua]
-  Tracker --> Safe[Core/Util.lua safe API boundary]
-  Safe --> Aura[C_UnitAuras and spell APIs]
-  Tracker --> Display[Modules/Display.lua]
-  Display --> Anchor[RothSpellTrackerAnchor and pooled icons]
-  Core --> Minimap[LDB / LibDBIcon]
+  UI --> R["Addon:RequestRebuild"]
+  R --> D
+  R --> S
+  D --> ST["stable addon-owned track slots"]
+  A --> ST
+  A --> AC["Blizzard CustomAuraContainer/AddAuraSlot"]
+  AC --> AB["managed icon/count/cooldown sinks"]
+  S --> U
+  S --> SP["accessible C_Spell readiness/cooldown/charges"]
+  S --> D
+  E["PLAYER_TARGET_CHANGED / PLAYER_FOCUS_CHANGED"] --> A
+  G["PLAYER_REGEN_ENABLED"] --> D
+  C --> M["LDB / LibDBIcon"]
+  X1["test_managed_aura_12_1.lua"] --> A
+  X2["test_spell_state_12_1.lua"] --> S
 ```
+
+There is no addon `UNIT_AURA`, raw AuraData cache, aura frame-tree scan, or state-driven layout compaction.
