@@ -1,48 +1,56 @@
-# Roth Spell Tracker — TODO
+# Roth Spell Tracker — remaining gates
 
-Goal: configurable compact tracker for SPELL readiness and specific AURA displays without treating restricted Retail 12.1 state as ordinary Lua data.
+## Completed in 0.4.4
 
-## Retail 12.1 migration
+- [x] Preserve a newer SavedVariables schema instead of overwriting it during downgrade.
+- [x] Run future-schema data through a temporary session-only compatibility view.
+- [x] Canonicalize supported databases through an allowlist and remove unknown nested keys.
+- [x] Require explicit confirmation before Reset DB or Replace DB.
+- [x] Deterministically arbitrate conflicting legacy aliases before deduplication.
+- [x] Bound legacy spell-ID text and enum-like strings before conversion/comparison.
+- [x] Surface future-schema mode in chat and configuration UI.
+- [x] Share UI and persistence bounds and expose the DB schema in TOC metadata.
+- [x] Display current multi-charge counts including zero and one.
+- [x] Keep on-hold cooldowns unavailable without drawing a false active radial.
+- [x] Retire and recreate a managed graph instead of reparenting after AuraContainer adoption.
+- [x] Replace per-track/deprecated scroll rows with virtualized `WowScrollBoxList` ownership.
 
-- [x] Target Interface `120100` and source baseline `12.1.0.69497`.
-- [x] Remove addon-owned `UNIT_AURA`, raw `C_UnitAuras`/`UnitAura` scans, aura indexing, and raw AuraData caches.
-- [x] Render every AURA track through one Blizzard `CustomAuraContainer` and one `AddAuraSlot`.
-- [x] Configure managed icon, application-count, duration-cooldown, and static glow sinks during frame initialization.
-- [x] Reserve one stable slot per enabled track; never compact layout from readiness or managed aura visibility.
-- [x] Add stable track UIDs and schema v3 migration.
-- [x] Remove unsupported AURA `minStacks` and `INACTIVE`; migrate old missing-only entries to `ALWAYS`.
-- [x] Gate spell names, icons, known/usability, cooldowns, charges, and log values before Lua inspection.
-- [x] Ignore cooldown only when accessible `isOnGCD == true`; remove duration-threshold GCD inference.
-- [x] Precreate spell visuals/glow outside combat and defer frame/container/layout rebuilds during combat.
-- [x] Remove the `/rst` alias collision with Roth Secret Tester.
-- [x] Replace the obsolete Options slider template in the configuration window.
-- [x] Add local deterministic managed-aura and spell-state regressions.
+## Retained hardening
+
+- [x] Use current `C_SpellBook` knowledge APIs with deprecated fallbacks only.
+- [x] Capture `isOnGCD` in its documented event context and match the exact resolved-spell cycle.
+- [x] Treat LoC replacement as cooldown presentation only.
+- [x] Keep charge, normal and LoC cooldowns independent and explicitly layered.
+- [x] Use native AuraContainer acquisition/assignment/refresh ownership with no raw readback.
+- [x] Bound UID reuse, candidate rows, diagnostic logging and UI realization.
+- [x] Reapply layout on scale/display changes and reconcile protected cooldown/layout state after combat.
+- [x] Enforce Lua 5.1 syntax and deterministic regressions through read-only pinned CI.
 
 ## Required live-client validation
 
-- [ ] Fresh install and representative v1/v2 SavedVariables migration to schema v3.
-- [ ] Add, edit, enable/disable, remove, and reorder SPELL and AURA entries.
-- [ ] Player, target, and focus HELPFUL/HARMFUL aura slots.
-- [ ] Relationship restrictions: helpful on assistable units and harmful on non-assistable units.
-- [ ] Target/focus identity changes while an aura is present or absent.
-- [ ] Aura applications/count, duration cooldown, active glow, `ALWAYS` placeholder, and `ACTIVE` blank slot.
-- [ ] Known/unknown/replaced spells, charges, explicit GCD, inaccessible GCD classification, and real cooldowns.
-- [ ] Combat-time configuration changes result in one post-combat rebuild and no frame creation/layout mutation in combat.
-- [ ] Frame lock/unlock/drag/reset, growth directions, size/spacing, minimap icon, configuration window, and reload persistence.
-- [ ] No Lua, taint, forbidden-object, blocked-action, or secret-value error on the named Retail build.
-- [ ] CPU/allocation capture during spell-event bursts and target/focus churn.
+All observations must record exact client build, Interface, addon commit and SavedVariables fixture.
 
-## Remaining product work
-
-- [ ] Plain-text import/export for schema-v3 tracks, with finite length/row limits and strict validation.
-- [ ] Per-entry visual presets that do not require observing managed aura state.
-- [ ] Optional combat/instance/spec sets using accessible ordinary context only.
-- [ ] Explicit user-facing warning when a managed spell-ID relationship/filter combination cannot match under Blizzard rules.
+- [ ] Confirm `GetBuildInfo()` and Interface on Retail 12.1.5.
+- [ ] Fresh install plus representative v1/v2/v3 migration and `/reload`.
+- [ ] Load a future-schema fixture, change session settings, logout/reload with the newer addon, and prove the source root was preserved.
+- [ ] Accept and cancel Reset DB / Replace DB; verify persistence and minimap reference ownership.
+- [ ] Add/edit/remove/reorder/enable SPELL and AURA tracks; churn UIDs through repeated deletion/re-addition.
+- [ ] Scroll configurations containing 0, 1, viewport+1 and 500 tracks; verify recycled click targets, reorder/delete, scrollbar, mouse wheel and retained position.
+- [ ] Player/target/focus HELPFUL/HARMFUL relationship combinations, including unfilterable identity cases.
+- [ ] Native target/focus replacement, loss/death, rapid transition, range/phase/instance loss and recovery.
+- [ ] Managed icon, application count, duration and overlay ordering; `ALWAYS` placeholder and `ACTIVE` blank slot.
+- [ ] Known/unknown/learned/replaced/shapeshift spells, partial/empty charges, charge text `0/1/N`, GCD, real/on-hold cooldowns and LoC.
+- [ ] Verify charge < normal < LoC < overlay rendering at multiple icon sizes and UI scales.
+- [ ] Verify protected radial behavior before/during/after combat with no blocked action or stale reappearance.
+- [ ] Configure layout during combat and confirm one current-state post-combat reconciliation.
+- [ ] Open world, encounter, Mythic+, arena and battleground: no Lua, taint, forbidden-object or secret-value loops.
+- [ ] CPU/allocation capture during cooldown bursts, resource churn, config scrolling and rapid target/focus replacement.
 
 ## Deliberate exclusions
 
 - Missing-only AURA alerts.
 - AURA stack-threshold decisions.
-- Raw aura data export or diagnostics.
-- Managed AuraButton visibility, alpha, child count, frame count, assigned instance, or layout inspection.
-- Duration-based guessing that a cooldown is the GCD.
+- Raw aura export or diagnostics.
+- Managed AuraButton visibility, geometry, count or assignment inspection.
+- Duration-based GCD guessing.
+- Protected-operation retries or polling.

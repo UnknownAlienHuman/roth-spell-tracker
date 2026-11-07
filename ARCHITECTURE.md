@@ -1,138 +1,123 @@
 # Roth Spell Tracker architecture
 
-## Load and ownership
+## Runtime owners
 
-```text
-RothSpellTracker.toc
-  -> bundled LibStub / CallbackHandler / LibDataBroker / LibDBIcon
-  -> Core/Config.lua
-  -> Core/Util.lua
-  -> Core/Logging.lua
-  -> Core/Minimap.lua
-  -> Core/ConfigUI.lua
-  -> Core/Core.lua
-  -> Modules/Display.lua
-  -> Modules/ManagedAuras.lua
-  -> Modules/Tracker.lua
-```
+| Owner | Responsibility |
+|---|---|
+| `Core/Config.lua` | version, defaults and hard input/identity bounds |
+| `Core/Util.lua` | access gates, spellbook contract, override resolution and sanitized spell structures |
+| `Core/Core.lua` | migration, canonicalization, forward-version guard, UID allocation, lifecycle and slash commands |
+| `Core/Logging.lua` | bounded diagnostics and visible notifications |
+| `Core/ConfigUI.lua` | track mutation UI, virtualized ScrollBox and destructive-reset entry point |
+| `Modules/Display.lua` | first-slot origin, bounds/layout, cooldown lanes, layering and combat deferral |
+| `Modules/ManagedAuras.lua` | managed container/slot configuration only |
+| `Modules/Tracker.lua` | SPELL identity cache, event arbitration, GCD evidence and readiness state |
 
-`Blizzard_AuraContainer` is a required Blizzard dependency so `CustomAuraContainerTemplate`, `CustomAuraButtonTemplate`, `AddAuraSlot`, and the public managed display sinks exist before Roth Spell Tracker initializes.
-
-All addon files extend one `NS.Addon` table.
-
-## Persistent state
-
-`Core/Config.lua` defines schema version 3. `Core/Core.lua` is the sole SavedVariables migration and sanitization owner.
-
-Each track has a durable numeric `uid` separate from spell ID. This allows one managed container to be reconfigured without creating a new container for every edit.
-
-SPELL fields:
-
-```text
-uid, id, kind=SPELL, enabled,
-showWhen=ALWAYS|READY|NOTREADY,
-ignoreGCD
-```
-
-AURA fields:
-
-```text
-uid, id, kind=AURA, enabled,
-showWhen=ALWAYS|ACTIVE,
-unit=player|target|focus,
-auraType=HELPFUL|HARMFUL
-```
-
-Schema migration assigns stable UIDs, removes `minStacks`, and maps unsafe/unsupported AURA `INACTIVE` state to `ALWAYS`. Track count is capped at 500. Unknown schemas reset while preserving bounded minimap and frame settings.
+There is one SavedVariables root: `RothSpellTrackerDB`.
 
 ## Access boundary
 
-`Core/Util.lua` owns game-value access decisions.
+`canaccessvalue` gates scalar identity and `canaccesstable` gates table inspection. `issecretvalue` and `issecrettable` classify only. Every consumed field is converted to an ordinary primitive before comparison, arithmetic, formatting, caching or persistence.
 
-- `CanAccess` is called before treating game-returned values as ordinary Lua data.
-- `SafeBool`, `SafeNumber`, `SafeString`, and `SafeTable` reject inaccessible or secret values.
-- spell name, icon, known, usable, cooldown, and charge wrappers return bounded ordinary primitives/tables only;
-- logger input is converted through `SafeToString` and never stringifies raw inaccessible values.
+An active normal cooldown with inaccessible timing blocks readiness without leaking a radial tuple. An explicitly inactive readable cooldown remains usable even when unused timing is inaccessible. An on-hold cooldown (`isEnabled == false`, therefore `isActive == false`) blocks readiness but remains presentation-inactive. LoC metadata controls presentation only and does not override `C_Spell.IsSpellUsable`.
 
-`pcall` contains API errors but is not treated as permission or declassification.
-
-## Stable layout
-
-`Modules/Display.lua` owns `RothSpellTrackerAnchor`, persistent position, lock state, stable track slots, spell visual children, and layout.
-
-Every enabled track reserves a slot according to SavedVariables order. Runtime readiness or aura assignment can hide only the child presentation inside that slot; it never changes slot count, position, or ordering. This prevents managed aura visibility from becoming a layout side channel.
-
-Spell icon, cooldown, count, border, and glow regions are created during an out-of-combat rebuild. They are not created on first activation.
-
-Configuration changes that require frame/container creation or geometry mutation set `pendingRebuild` during combat. `PLAYER_REGEN_ENABLED` performs one rebuild using current DB state.
-
-## Managed AURA tracks
-
-`Modules/ManagedAuras.lua` owns one `CustomAuraContainer` per durable aura-track UID. Each container owns exactly one slot key, `track`.
-
-Creation sequence:
+## Spell identity and knowledge
 
 ```text
-addon-owned stable slot
-  -> CustomAuraContainerTemplate
-  -> SetUnit(player|target|focus)
-  -> AddAuraSlot("track", HELPFUL|HARMFUL, options)
-       candidateFilters.includeSpellIDs[spellID] = true
-       initializeFrame(button)
-         -> icon Texture + SetIcon
-         -> count FontString + SetApplicationCount
-         -> Cooldown + SetDurationCooldown
-         -> static addon glow child
-  -> SetEnabled(true)
+configured spell ID
+  -> C_Spell.GetBaseSpell
+  -> C_Spell.GetOverrideSpell
+  -> resolved ordinary spell ID
+  -> C_SpellBook.IsSpellKnown
 ```
 
-The initialization callback configures display sinks before Blizzard applies managed access restrictions. The addon does not retain or query the returned AuraButton.
+The resolved ID is cached by track UID plus configured ID. Spellbook, icon, override, shapeshift, talent/spec and world invalidations clear the cache. Deprecated global knowledge functions are fallback-only.
 
-Container reconfiguration uses only public inbound methods:
+## Persistent identity and migrations
 
-- `SetUnit`;
-- `SetAuraSlotFilterString`;
-- `SetAuraSlotCandidateFilters`;
-- `SetEnabled`;
-- `UpdateAllAuras` for explicit target/focus identity changes.
-
-The module does not register `UNIT_AURA` and does not call raw aura APIs. Blizzard's managed container owns aura events, data, assignment, visibility, count, duration, and secrecy.
-
-AURA `ALWAYS` uses an addon-owned static placeholder behind the managed button. The placeholder never reacts to or queries managed state. `ACTIVE` hides that placeholder. The slot itself remains reserved in both modes.
-
-## SPELL tracks
-
-`Modules/Tracker.lua` listens only to spell/talent/world readiness events. It has no aura event or aura cache.
-
-SPELL evaluation:
-
-1. accessible known predicate;
-2. accessible usability predicate;
-3. accessible charge data when complete;
-4. accessible cooldown data;
-5. ignore cooldown only when accessible `isOnGCD == true` and `ignoreGCD` is enabled;
-6. unknown GCD classification fails closed as a real cooldown.
-
-A duration threshold is never used as proof that a cooldown is the GCD.
-
-`Tracker:RequestRefresh` coalesces spell bursts with one zero-delay callback. It updates only already-created spell visuals. Frame/container creation remains the Display rebuild owner's responsibility.
-
-## Configuration UI
-
-`Core/ConfigUI.lua` is the only track editor. It exposes supported schema fields only. There is no AURA stack threshold or missing-only mode. Global size and spacing controls use `UISliderTemplate`.
-
-Saving, deleting, enabling, or reordering a track calls the single `Addon:RequestRebuild` boundary.
-
-## Slash ownership
-
-Roth Secret Tester owns `/rst`. Roth Spell Tracker registers only:
+Schema v3 stores an ordered track array. Each active track owns a unique UID in `1..500`; allocation reuses holes after deletion.
 
 ```text
-/rothspelltracker
-/rspellt
-/spelltracker
+SavedVariables root
+  -> root/schema access check
+  -> bounded migration or forward-version guard
+  -> bounded structural sanitization
+  -> allowlisted canonical database
 ```
 
-## Evidence boundary
+Migration and sanitization inspect at most 2,000 candidate rows. Legacy spell-ID text is bounded before numeric conversion; enum-like strings are bounded before comparison. V1 aliases use a total deterministic source order before deduplication and the 500-track cap.
 
-The two local Lua regressions prove managed slot construction/reconfiguration and explicit-GCD/accessibility behavior against mocks. They do not prove live template availability, spell-filter relationship rules, secure restrictions, taint behavior, or visual output. Those require exact-build client evidence.
+Supported schemas are rebuilt into a fresh root containing only known fields and normalized tracks. Unknown nested graphs are not retained accidentally.
+
+### Forward-version transaction
+
+When `savedVersion > DB_VERSION`, the addon does not migrate, sanitize in place or assign a replacement global. It creates a temporary supported session view containing only validated ordinary frame/minimap preferences and leaves `RothSpellTrackerDB` untouched.
+
+```text
+newer persistent root
+  -> preserved opaque source
+  -> session-only supported view
+  -> visible warning
+  -> explicit confirmed Replace DB action only
+```
+
+This prevents an older addon version from destroying newer-schema data on logout. Confirmation is also required for ordinary Reset DB.
+
+## Managed AURA path
+
+```text
+stable addon slot
+  -> addon-owned CustomAuraContainerTemplate
+    -> AddAuraSlot("track", HELPFUL|HARMFUL, options)
+      -> Blizzard-managed AuraButton
+        -> adopted icon / application-count / duration-cooldown regions
+```
+
+All adopted descendants are complete during `initializeFrame`. The managed Cooldown and addon overlay receive explicit frame levels. The addon never retains the AuraButton. Reconfiguration uses only public container setters; setter-owned refresh is not duplicated.
+
+The parent graph is final before `AddAuraSlot` adopts descendants. If internal slot identity is ever violated, the existing graph is disabled and a new graph is created under the new final parent; adopted containers and descendants are never reparented.
+
+## SPELL event and display path
+
+`SPELL_UPDATE_COOLDOWN` captures accessible `isOnGCD` evidence synchronously, keyed by track UID, resolved spell and exact cycle. Full rendering is coalesced. Identity events clear the resolved-ID cache and evidence.
+
+Readiness requires readable known/usability/charge/normal-cooldown state. A multi-charge spell exposes `showCount=true` when `maxCharges > 1`; Display then renders the ordinary current charge value, including zero or one. Charge count and recharge timing remain separate values.
+
+LoC supplies a separate visual lane; `shouldReplaceNormalCooldown` selects whether normal and charge lanes are suppressed.
+
+```text
+charge recharge   frame level +1
+normal cooldown   frame level +2
+loss of control   frame level +3
+top overlay       frame level +4
+```
+
+Cooldown mutation is protected in 12.1.5. The addon mutates only addon-owned ordinary cooldown widgets and only outside combat. Managed AURA duration remains Blizzard-owned through `SetDurationCooldown`.
+
+## Configuration virtualization
+
+The persistent list may contain 500 tracks, but the dialog uses the current Blizzard ScrollBox stack:
+
+```text
+CreateIndexRangeDataProvider(trackCount)
+  -> WowScrollBoxList
+  -> CreateScrollBoxListLinearView
+  -> pooled visible Frame elements
+  -> initializer resolves tracks[dataIndex]
+```
+
+Frames and scripts are created once per pooled visible element. The provider contains ordinary indexes only. Every click retrieves the frame's current element index and re-resolves the track; row frames and provider elements are not durable identity. Reorder, removal and editing replace the index-range provider while retaining a valid scroll position.
+
+## Layout and combat
+
+The saved position represents the first configured slot. An ordinary origin frame preserves that location while the movable bounding frame grows around the actual slot extent.
+
+- geometry changes call `RequestLayout`;
+- track/type/order changes call `RequestRebuild`;
+- scale/display changes reapply layout only;
+- rebuild never forces a SPELL child visible;
+- structural and geometry changes defer in combat and converge after `PLAYER_REGEN_ENABLED`.
+
+## Evidence ceiling
+
+Static, CI and mocked tests prove local control flow and repository invariants. They do not prove named-client template rendering, relationship filtering, target/focus lifecycle, protected-call/taint behavior, LoC timing, ScrollBox interaction, visual correctness or performance.

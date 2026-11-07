@@ -1,16 +1,67 @@
 # Roth Spell Tracker
 
-Configurable compact tracker for spell readiness and specific player/target/focus auras on World of Warcraft Retail 12.1.
+Compact spell-readiness and managed-aura tracker for World of Warcraft Retail / Midnight 12.1.5.
 
-## Compatibility
+## Target
 
-- Game: World of Warcraft Retail / Midnight 12.1.0
-- Interface: `120100`
-- Version: `0.3.0`
-- Verified Blizzard source baseline: `12.1.0.69497`
+- Interface: `120105`
+- Addon version: `0.4.4`
+- Database schema: `3`
+- Reviewed source evidence: `12.1.5.70783` / `297d7aaaa736f346b3e036f38ee088eaf7f8c07f`
+- Runtime status: **NOT-RUN** on a named client
 - SavedVariables: `RothSpellTrackerDB`
 - Required Blizzard addon: `Blizzard_AuraContainer`
-- Bundled libraries: LibStub, CallbackHandler-1.0, LibDataBroker-1.1, LibDBIcon-1.0
+
+## SPELL tracks
+
+SPELL tracks resolve the configured ID through the explicit base/override relationship and use the current `C_SpellBook.IsSpellKnown` contract. Deprecated knowledge globals are compatibility fallbacks only.
+
+Readiness is derived from accessible spell knowledge, `C_Spell.IsSpellUsable`, charge availability and the normal cooldown lane:
+
+- `ALWAYS`: reserve the slot and dim an unavailable spell;
+- `READY`: show only when ready;
+- `NOTREADY`: show only when unavailable;
+- `ignoreGCD`: ignore a cooldown only when `isOnGCD == true` was captured inside `SPELL_UPDATE_COOLDOWN` for the same resolved spell and exact cooldown cycle.
+
+Multi-charge spells display their authoritative current charge count whenever `maxCharges > 1`, including `1` and `0`; the charge-recharge radial remains independent from the ordinary cooldown radial.
+
+Loss-of-control data is presentation metadata, not a second castability oracle. `shouldReplaceNormalCooldown` selects whether the LoC radial replaces normal and charge radials; readiness still comes from the spell APIs above.
+
+Normal cooldown, charge recharge and loss-of-control timing use three independent addon-owned Cooldown frames. Their frame levels are explicit, with count, border and readiness glow in a top overlay. `modRate` and `chargeModRate` are preserved.
+
+Retail 12.1.5 marks Cooldown mutations protected. The addon changes timing only outside combat. A changed stale radial is hidden during combat and reconciled after combat, including the case where desired timing returns to the last successfully applied tuple. A cooldown on hold (`isEnabled == false`, therefore `isActive == false`) still blocks readiness but does not render a false active radial.
+
+## AURA tracks
+
+Each AURA track uses one addon-owned `CustomAuraContainer` and one `AddAuraSlot`. Blizzard owns acquisition, dynamic target/focus lifecycle, assignment, visibility, applications, duration and restricted data.
+
+The addon does **not** register `UNIT_AURA`, call raw aura APIs, inspect managed children, append `UpdateAllAuras()` after public setters or own target/focus aura refresh.
+
+- `ALWAYS`: reserve the slot and show a dim static placeholder while no managed button is assigned;
+- `ACTIVE`: reserve a blank slot and show only Blizzard's managed button.
+
+Spell-ID candidate matching is constrained by unit relationship, harmfulness and aura secrecy. Missing-only and stack-threshold decisions remain unavailable because they require managed aura-state readback.
+
+The parent and adopted descendant graph is final when `AddAuraSlot` runs. If an internal slot-identity invariant is ever broken, the old graph is disabled and a fresh graph is created with its final parent; adopted containers or descendants are never reparented.
+
+## Persistence and downgrade safety
+
+The runtime domain is bounded to 500 tracks and UIDs. Migration/sanitization scans at most 2,000 candidate rows, bounds legacy key and enum text lengths, rejects malformed IDs/non-finite values and deterministically selects one canonical legacy record before deduplication.
+
+Supported databases are rebuilt from an allowlist of schema fields, so unknown root, frame, minimap and per-track fields do not remain attached to the persistent graph. A database with a schema newer than this addon is never rewritten automatically. The addon runs from a temporary sanitized session view, shows a warning and preserves the newer SavedVariables root at logout. `Reset DB` / `Replace DB` requires explicit confirmation before replacing persistent data.
+
+Unknown older or malformed schemas fall back to a clean supported database while preserving validated frame and minimap preferences. Removed UIDs are reused.
+
+## Layout, configuration and support
+
+- The first configured slot remains at the saved position while the bounding frame grows RIGHT, LEFT, UP or DOWN.
+- Geometry-only changes use `RequestLayout`; structural changes use `RequestRebuild`.
+- Scale/display changes reapply current layout without rebuilding containers.
+- Structural and geometry mutations defer in combat and converge after `PLAYER_REGEN_ENABLED`.
+- The configuration list uses the current virtualized `WowScrollBoxList`/`MinimalScrollBar` stack with an index-range data provider; only visible row frames exist.
+- Row scripts are installed once and re-resolve the current ordinary track index on every action.
+- The logger is a bounded 250-line ring and `LibDBIcon:Refresh` rebinds minimap settings after database replacement.
+- The configuration dialog closes with Escape and surfaces future-schema session-only mode.
 
 ## Commands
 
@@ -18,77 +69,36 @@ Configurable compact tracker for spell readiness and specific player/target/focu
 - `/rspellt`
 - `/spelltracker`
 
-The previous `/rst` alias was removed because Roth Secret Tester owns the same alias.
+Subcommands: `config`, `debug on|off`, `lock`, `unlock`, `log [N]`, `reset`.
 
-Subcommands: `config`, `debug on|off`, `lock`, `unlock`, `log [N]`, and `reset`.
+`reset` opens a destructive-action confirmation. `/rst` is intentionally not registered because Roth Secret Tester owns it.
 
-## Track types
+## Validation
 
-### SPELL
-
-A SPELL track uses accessible `C_Spell` readiness, charge, cooldown, and explicit `isOnGCD` evidence.
-
-- `ALWAYS` — always reserve and render the icon; dim it when unavailable;
-- `READY` — show only when ready;
-- `NOTREADY` — show only when unavailable;
-- `ignoreGCD` ignores a cooldown only when Blizzard returns accessible `isOnGCD == true`.
-
-A short duration is not treated as GCD evidence. Missing or inaccessible classification fails closed as a real cooldown.
-
-### AURA
-
-AURA tracks do not call `UNIT_AURA`, `C_UnitAuras`, `UnitAura`, or maintain raw AuraData caches. Each track owns one Blizzard `CustomAuraContainer` and one `AddAuraSlot` filtered by spell ID.
-
-The managed AuraButton receives only Blizzard-supported display sinks:
-
-- icon;
-- application count;
-- duration cooldown;
-- addon-owned static glow art.
-
-Blizzard owns aura assignment, visibility, duration, stacks, filtering, restricted data, and refresh events.
-
-Supported display modes:
-
-- `ALWAYS` — reserve a stable slot and show a dim static placeholder while the managed aura button is absent;
-- `ACTIVE` — reserve a stable blank slot and let the managed aura button appear only when Blizzard assigns the aura.
-
-`INACTIVE` and `minStacks` were removed. Missing-only or stack-threshold decisions require observing managed aura state and are not legal general-purpose 12.1 inputs. Existing `INACTIVE` entries migrate to `ALWAYS`; existing stack thresholds are discarded.
-
-Spell-ID filtering follows Blizzard's own candidate-filter restrictions: helpful spell matching is supported on assistable units, and harmful spell matching on non-assistable units. Unsupported relationship/filter combinations fail through the managed container rather than falling back to raw scans.
-
-## Layout and combat behavior
-
-Every enabled track has a stable reserved slot. Dynamic spell or aura state never compacts or reorders the tracker.
-
-Frame/container creation, reconfiguration, anchor changes, icon sizing, and layout rebuilds are deferred during combat and applied after `PLAYER_REGEN_ENABLED`. Spell visual children and glow textures are created during the out-of-combat rebuild rather than on the first proc.
-
-## Configuration
-
-The configuration window supports add, edit, enable/disable, remove, and reorder operations. AURA entries expose only unit, HELPFUL/HARMFUL, and `ALWAYS`/`ACTIVE`. The obsolete stack field and missing-only mode are absent. Sliders use `UISliderTemplate`, not the retired Options slider template.
-
-## Validation status
-
-Local Lua checks passed for the exact source files prepared for this branch:
+GitHub Actions executes Lua 5.1 syntax checks for addon, libraries and tests, then runs every deterministic regression:
 
 ```text
-texlua --luaconly Core/*.lua Modules/*.lua tests/*.lua
-texlua tests/test_managed_aura_12_1.lua
-texlua tests/test_spell_state_12_1.lua
+luac5.1 -p Core/*.lua Modules/*.lua libs/**/*.lua tests/*.lua
+lua5.1 tests/test_config_ui_12_1_5.lua
+lua5.1 tests/test_database_12_1_5.lua
+lua5.1 tests/test_edge_contract_12_1_5.lua
+lua5.1 tests/test_managed_aura_12_1.lua
+lua5.1 tests/test_repository_contract.lua
+lua5.1 tests/test_spell_state_12_1.lua
+lua5.1 tests/test_support_12_1_5.lua
 ```
 
-The managed-aura regression proves one `AddAuraSlot` per track, spell-ID candidate filters, target/focus refresh, stable placeholders, reconfiguration without raw aura APIs, and no frame creation during combat. The spell regression proves explicit-GCD-only suppression and fail-closed behavior for inaccessible usability, cooldown, charges, and GCD classification.
+The harness covers persistence bounds/canonicalization, deterministic migrations, forward-schema preservation, explicit reset confirmation, exact-case TOC paths, current spellbook APIs, authoritative charge counts, override caching, exact-cycle GCD evidence, cooldown/charge/LoC lanes, on-hold cooldown presentation, protected-cooldown recovery, adopted AuraContainer parent invariants, managed-aura ownership, modern virtualized configuration ownership, layout combat deferral, logging and minimap ownership.
 
-Live Retail testing is still required for actual managed AuraContainer templates, relationship/filter restrictions, target/focus changes, Edit Mode/UI scale, combat transitions, SavedVariables migration, spell replacement/override states, taint, errors, and performance.
+Live-client validation remains required for exact build/interface, managed relationship filters, target/focus transitions, LoC timing, protected-call/taint behavior, ScrollBox interaction, visuals, UI scale and profiling.
 
-## Developer documentation
+## Documentation
 
 - [Architecture](ARCHITECTURE.md)
 - [Agent guide](AGENT_GUIDE.md)
-- [Code index](CODE_INDEX.md)
-- [Code graph](CODE_GRAPH.md)
+- [Remaining live gates](todo.md)
 - [WoW addon engineering knowledge base](https://github.com/UnknownAlienHuman/wow-addon-engineering-kb)
 
 ## License
 
-Licensed under the [MIT License](LICENSE). Bundled third-party components remain under their own notices.
+MIT. Bundled third-party libraries retain their own notices.

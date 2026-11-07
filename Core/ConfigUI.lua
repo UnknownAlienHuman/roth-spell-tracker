@@ -7,6 +7,9 @@ local U = Addon.Util
 local UI = {}
 Addon.UI = UI
 
+local QUESTION_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
+local ROW_HEIGHT = 26
+local ROW_SPACING = 1
 local KINDS = {
   { key = "SPELL", text = "Spell readiness" },
   { key = "AURA", text = "Managed aura" },
@@ -76,15 +79,17 @@ local function InitializeDropdown(dropdown, items, onSelect)
   UIDropDownMenu_SetWidth(dropdown, 190)
   UIDropDownMenu_Initialize(dropdown, function()
     for _, item in ipairs(items) do
+      local itemKey = item.key
+      local itemText = item.text
       local info = UIDropDownMenu_CreateInfo()
-      info.text = item.text
-      info.value = item.key
-      info.checked = dropdown.value == item.key
+      info.text = itemText
+      info.value = itemKey
+      info.checked = dropdown.value == itemKey
       info.func = function()
-        dropdown.value = item.key
-        UIDropDownMenu_SetSelectedValue(dropdown, item.key)
-        UIDropDownMenu_SetText(dropdown, item.text)
-        if onSelect then onSelect(item.key) end
+        dropdown.value = itemKey
+        UIDropDownMenu_SetSelectedValue(dropdown, itemKey)
+        UIDropDownMenu_SetText(dropdown, itemText)
+        if onSelect then onSelect(itemKey) end
       end
       UIDropDownMenu_AddButton(info)
     end
@@ -104,6 +109,7 @@ end
 local function CreateSlider(parent, labelText, minimum, maximum, step, getter, setter)
   local holder = CreateFrame("Frame", nil, parent)
   holder:SetSize(260, 48)
+
   local label = CreateLabel(holder, labelText)
   label:SetPoint("TOPLEFT", 0, 0)
   local valueLabel = CreateLabel(holder, "", "GameFontHighlightSmall")
@@ -141,9 +147,12 @@ local function EnsureTracks()
   return Addon.db.tracks
 end
 
-local function FindExisting(tracks, entry)
+local function FindExisting(tracks, entry, excludeIndex)
   for index, current in ipairs(tracks) do
-    if type(current) == "table" and current.kind == entry.kind and current.id == entry.id then
+    if index ~= excludeIndex
+      and type(current) == "table"
+      and current.kind == entry.kind
+      and current.id == entry.id then
       if entry.kind == "SPELL" then return index end
       if current.unit == entry.unit and current.auraType == entry.auraType then return index end
     end
@@ -151,25 +160,105 @@ local function FindExisting(tracks, entry)
   return nil
 end
 
-local function PrettyEntry(entry)
-  local name = U.GetSpellName(entry.id) or "unknown"
+local function ResolveEntryID(entry)
+  if entry.kind ~= "SPELL" then return entry.id end
+  if Addon.Tracker and type(Addon.Tracker.GetResolvedSpellID) == "function" then
+    local spellID = Addon.Tracker:GetResolvedSpellID(entry)
+    if spellID then return spellID end
+  end
+  return U.ResolveSpellID(entry.id) or entry.id
+end
+
+local function PrettyEntry(entry, displayID, name)
+  displayID = displayID or ResolveEntryID(entry)
+  name = name or U.GetSpellName(displayID) or "unknown"
   if entry.kind == "AURA" then
     return string.format(
       "%d  |cffaaaaaa(Aura)|r  %s  |cff666666[%s %s, %s]|r",
-      entry.id,
-      name,
-      entry.unit,
-      entry.auraType,
-      entry.showWhen
+      entry.id, name, entry.unit, entry.auraType, entry.showWhen
     )
   end
   return string.format(
     "%d  |cffaaaaaa(Spell)|r  %s  |cff666666[%s, %s]|r",
-    entry.id,
-    name,
-    entry.showWhen,
+    entry.id, name, entry.showWhen,
     entry.ignoreGCD ~= false and "ignore explicit GCD" or "show GCD"
   )
+end
+
+local function GetRowDataIndex(row)
+  if type(row.GetElementData) ~= "function" then return nil end
+  return U.SafeInteger(row:GetElementData(), 1, Addon.MAX_TRACKS or 500)
+end
+
+local function InitializeTrackRow(row)
+  if row.rstInitialized then return end
+  row.rstInitialized = true
+
+  row.icon = row:CreateTexture(nil, "ARTWORK")
+  row.icon:SetSize(20, 20)
+  row.icon:SetPoint("LEFT", 2, 0)
+  row.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+  row.enabled = CreateCheckbox(row, "", function() end)
+  row.enabled:SetPoint("LEFT", row.icon, "RIGHT", 2, 0)
+  row.up = CreateButton(row, "^", 22, function() end)
+  row.up:SetPoint("LEFT", row.enabled, "RIGHT", 2, 0)
+  row.down = CreateButton(row, "v", 22, function() end)
+  row.down:SetPoint("LEFT", row.up, "RIGHT", 2, 0)
+  row.text = CreateLabel(row, "", "GameFontHighlight")
+  row.text:SetPoint("LEFT", row.down, "RIGHT", 6, 0)
+  row.text:SetWidth(390)
+  row.edit = CreateButton(row, "Edit", 50, function() end)
+  row.edit:SetPoint("LEFT", row.text, "RIGHT", 6, 0)
+  row.remove = CreateButton(row, "Remove", 64, function() end)
+  row.remove:SetPoint("LEFT", row.edit, "RIGHT", 6, 0)
+
+  row.enabled:SetScript("OnClick", function(button)
+    local dataIndex = GetRowDataIndex(row)
+    local entry = dataIndex and EnsureTracks()[dataIndex]
+    if not entry then return end
+    entry.enabled = button:GetChecked() == true
+    Addon:RequestRebuild()
+  end)
+  row.up:SetScript("OnClick", function()
+    local dataIndex = GetRowDataIndex(row)
+    if dataIndex then UI:MoveEntry(dataIndex, -1) end
+  end)
+  row.down:SetScript("OnClick", function()
+    local dataIndex = GetRowDataIndex(row)
+    if dataIndex then UI:MoveEntry(dataIndex, 1) end
+  end)
+  row.edit:SetScript("OnClick", function()
+    local dataIndex = GetRowDataIndex(row)
+    if dataIndex then UI:LoadEntry(dataIndex) end
+  end)
+  row.remove:SetScript("OnClick", function()
+    local dataIndex = GetRowDataIndex(row)
+    if dataIndex then UI:RemoveEntry(dataIndex) end
+  end)
+end
+
+function UI:InitializeTrackRow(row, dataIndex)
+  InitializeTrackRow(row)
+
+  local tracks = EnsureTracks()
+  local entry = tracks[dataIndex]
+  if not entry then return end
+
+  local displayID = ResolveEntryID(entry)
+  local name = U.GetSpellName(displayID) or "unknown"
+  row.icon:SetTexture(U.GetSpellIcon(displayID) or QUESTION_ICON)
+  row.text:SetText(PrettyEntry(entry, displayID, name))
+  row.enabled:SetChecked(entry.enabled ~= false)
+  row.up:SetShown(dataIndex > 1)
+  row.down:SetShown(dataIndex < #tracks)
+end
+
+function UI:ResetTrackRow(row)
+  if not row.rstInitialized then return end
+  row.icon:SetTexture(nil)
+  row.text:SetText("")
+  row.enabled:SetChecked(false)
 end
 
 function UI:Create()
@@ -178,6 +267,8 @@ function UI:Create()
   local frame = CreateFrame("Frame", "RothSpellTrackerConfigFrame", UIParent, "UIPanelDialogTemplate")
   frame:SetSize(700, 600)
   frame:SetPoint("CENTER")
+  frame:SetFrameStrata("DIALOG")
+  frame:SetToplevel(true)
   frame:SetMovable(true)
   frame:EnableMouse(true)
   frame:RegisterForDrag("LeftButton")
@@ -185,19 +276,37 @@ function UI:Create()
     if not InCombatLockdown() then self:StartMoving() end
   end)
   frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+  frame:SetScript("OnShow", function(self) self:Raise() end)
   frame:SetClampedToScreen(true)
   frame:Hide()
   frame.Title:SetText("Roth Spell Tracker")
   self.frame = frame
 
+  if type(UISpecialFrames) == "table" then
+    local registered = false
+    for _, name in ipairs(UISpecialFrames) do
+      if name == frame:GetName() then registered = true break end
+    end
+    if not registered then UISpecialFrames[#UISpecialFrames + 1] = frame:GetName() end
+  end
+
   local heading = CreateLabel(frame, "Add / edit track", "GameFontNormalLarge")
   heading:SetPoint("TOPLEFT", 20, -42)
+  self.heading = heading
+
+  self.dbWarning = CreateLabel(frame, "", "GameFontHighlightSmall")
+  self.dbWarning:SetPoint("TOPRIGHT", -22, -45)
+  self.dbWarning:SetWidth(360)
+  self.dbWarning:SetJustifyH("RIGHT")
+  self.dbWarning:SetTextColor(1, 0.25, 0.25)
+  self.dbWarning:Hide()
 
   local idLabel = CreateLabel(frame, "Spell ID")
   idLabel:SetPoint("TOPLEFT", 20, -75)
   self.idBox = CreateEditBox(frame, 110)
   self.idBox:SetPoint("TOPLEFT", 20, -95)
   self.idBox:SetNumeric(true)
+  self.idBox:SetMaxLetters(10)
   self.idBox:HookScript("OnTextChanged", function() UI:UpdatePreview() end)
 
   self.previewIcon = frame:CreateTexture(nil, "ARTWORK")
@@ -236,7 +345,7 @@ function UI:Create()
 
   self.auraNote = CreateLabel(
     frame,
-    "Retail 12.1 aura tracks use Blizzard managed slots. Missing-only and stack-threshold detection are unavailable without reading restricted aura state.",
+    "Aura spell-ID matching is relationship-constrained; unfilterable identities are rejected. Missing-only and stack-threshold checks are unavailable.",
     "GameFontHighlightSmall"
   )
   self.auraNote:SetPoint("TOPLEFT", 20, -190)
@@ -263,13 +372,14 @@ function UI:Create()
   end)
   self.minimapCheck:SetPoint("TOPLEFT", 420, -288)
 
-  self.sizeSlider = CreateSlider(frame, "Icon size", 24, 96, 1,
+  self.sizeSlider = CreateSlider(frame, "Icon size", Addon.MIN_ICON_SIZE, Addon.MAX_ICON_SIZE, 1,
     function() return Addon.db.frame.size end,
-    function(value) Addon.db.frame.size = value; Addon:RequestRebuild() end)
+    function(value) Addon.db.frame.size = value; Addon:RequestLayout() end)
   self.sizeSlider:SetPoint("TOPLEFT", 20, -324)
-  self.spacingSlider = CreateSlider(frame, "Spacing", 0, 30, 1,
+
+  self.spacingSlider = CreateSlider(frame, "Spacing", 0, Addon.MAX_ICON_SPACING, 1,
     function() return Addon.db.frame.spacing end,
-    function(value) Addon.db.frame.spacing = value; Addon:RequestRebuild() end)
+    function(value) Addon.db.frame.spacing = value; Addon:RequestLayout() end)
   self.spacingSlider:SetPoint("TOPLEFT", 300, -324)
 
   local growLabel = CreateLabel(frame, "Grow")
@@ -278,31 +388,38 @@ function UI:Create()
   self.growDrop:SetPoint("TOPLEFT", 554, -338)
   InitializeDropdown(self.growDrop, GROWS, function(value)
     Addon.db.frame.grow = value
-    Addon:RequestRebuild()
+    Addon:RequestLayout()
   end)
 
   self.resetPosition = CreateButton(frame, "Reset position", 115, function() Addon.Display:ResetPosition() end)
   self.resetPosition:SetPoint("TOPLEFT", 20, -385)
-  self.resetDB = CreateButton(frame, "Reset DB", 90, function()
-    Addon:ResetDB()
-    UI:ClearForm()
-    UI:Refresh()
-  end)
+  self.resetDB = CreateButton(frame, "Reset DB", 100, function() Addon:ConfirmResetDB() end)
   self.resetDB:SetPoint("LEFT", self.resetPosition, "RIGHT", 8, 0)
 
   local listHeading = CreateLabel(frame, "Tracked", "GameFontNormalLarge")
   listHeading:SetPoint("TOPLEFT", 20, -422)
+  self.listHeading = listHeading
 
-  local scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
-  scroll:SetPoint("TOPLEFT", 20, -450)
-  scroll:SetPoint("BOTTOMRIGHT", -34, 18)
-  local child = CreateFrame("Frame", nil, scroll)
-  child:SetSize(1, 1)
-  scroll:SetScrollChild(child)
-  self.listChild = child
-  self.rows = {}
+  local scrollBox = CreateFrame("Frame", nil, frame, "WowScrollBoxList")
+  scrollBox:SetPoint("TOPLEFT", 20, -450)
+  scrollBox:SetPoint("BOTTOMRIGHT", -50, 18)
+  local scrollBar = CreateFrame("EventFrame", nil, frame, "MinimalScrollBar")
+  scrollBar:SetPoint("TOPLEFT", scrollBox, "TOPRIGHT", 6, 0)
+  scrollBar:SetPoint("BOTTOMLEFT", scrollBox, "BOTTOMRIGHT", 6, 0)
+
+  local view = CreateScrollBoxListLinearView(0, 0, 0, 0, ROW_SPACING)
+  view:SetElementExtent(ROW_HEIGHT)
+  view:SetElementInitializer("Frame", function(row, dataIndex)
+    UI:InitializeTrackRow(row, dataIndex)
+  end)
+  view:SetElementResetter(function(row)
+    UI:ResetTrackRow(row)
+  end)
+  ScrollUtil.InitScrollBoxListWithScrollBar(scrollBox, scrollBar, view)
+
+  self.scrollBox = scrollBox
+  self.scrollBar = scrollBar
   self.selectedIndex = nil
-
   self:ClearForm()
 end
 
@@ -317,12 +434,17 @@ function UI:OnKindChanged(kind)
   self.auraTypeLabel:SetShown(isAura)
   self.auraNote:SetShown(isAura)
   self.ignoreGCD:SetShown(not isAura)
+  if self.idBox then self:UpdatePreview() end
 end
 
 function UI:UpdatePreview()
-  local id = U.ToNumber(self.idBox:GetText())
-  local icon = id and U.GetSpellIcon(id) or nil
-  local name = id and U.GetSpellName(id) or nil
+  local id = U.SafeInteger(U.ToNumber(self.idBox:GetText()), 1, Addon.MAX_SPELL_ID)
+  local displayID = id
+  if id and self.kindDrop and self.kindDrop.value == "SPELL" then
+    displayID = U.ResolveSpellID(id) or id
+  end
+  local icon = displayID and U.GetSpellIcon(displayID) or nil
+  local name = displayID and U.GetSpellName(displayID) or nil
   if icon then
     self.previewIcon:SetTexture(icon)
     self.previewIcon:Show()
@@ -345,19 +467,14 @@ function UI:ClearForm()
 end
 
 function UI:SaveEntryFromForm()
-  local id = U.ToNumber(self.idBox:GetText())
-  if not id or id < 1 then
-    Addon:Log("ERROR", "Invalid spell ID")
+  local id = U.SafeInteger(U.ToNumber(self.idBox:GetText()), 1, Addon.MAX_SPELL_ID)
+  if not id then
+    Addon:Notify("ERROR", "Enter a valid spell ID")
     return
   end
-  id = math.floor(id + 0.5)
 
   local kind = self.kindDrop.value == "AURA" and "AURA" or "SPELL"
-  local entry = {
-    id = id,
-    kind = kind,
-    enabled = true,
-  }
+  local entry = { id = id, kind = kind, enabled = true }
   if kind == "AURA" then
     entry.showWhen = self.showDrop.value == "ACTIVE" and "ACTIVE" or "ALWAYS"
     entry.unit = self.unitDrop.value or "player"
@@ -370,16 +487,32 @@ function UI:SaveEntryFromForm()
   end
 
   local tracks = EnsureTracks()
-  local index = self.selectedIndex or FindExisting(tracks, entry)
+  local selectedIndex = self.selectedIndex
+  local duplicateIndex = FindExisting(tracks, entry, selectedIndex)
+  if selectedIndex and duplicateIndex then
+    Addon:Notify("ERROR", "That track already exists")
+    return
+  end
+
+  local index = selectedIndex or duplicateIndex
   if index and tracks[index] then
     entry.uid = tracks[index].uid
     entry.enabled = tracks[index].enabled ~= false
     tracks[index] = entry
-    Addon:Log("INFO", string.format("Updated %d (%s)", id, kind))
+    Addon:Notify("INFO", string.format("Updated %d (%s)", id, kind))
   else
-    entry.uid = Addon:AllocateTrackUID()
+    if #tracks >= (Addon.MAX_TRACKS or 500) then
+      Addon:Notify("ERROR", "Track limit reached")
+      return
+    end
+    local uid = Addon:AllocateTrackUID()
+    if not uid then
+      Addon:Notify("ERROR", "No free track slot")
+      return
+    end
+    entry.uid = uid
     tracks[#tracks + 1] = entry
-    Addon:Log("INFO", string.format("Added %d (%s)", id, kind))
+    Addon:Notify("INFO", string.format("Added %d (%s)", id, kind))
   end
 
   self.selectedIndex = nil
@@ -410,8 +543,11 @@ function UI:RemoveEntry(index)
   local tracks = EnsureTracks()
   if not tracks[index] then return end
   table.remove(tracks, index)
-  if self.selectedIndex == index then self:ClearForm()
-  elseif self.selectedIndex and self.selectedIndex > index then self.selectedIndex = self.selectedIndex - 1 end
+  if self.selectedIndex == index then
+    self:ClearForm()
+  elseif self.selectedIndex and self.selectedIndex > index then
+    self.selectedIndex = self.selectedIndex - 1
+  end
   self:Refresh()
   Addon:RequestRebuild()
 end
@@ -421,40 +557,32 @@ function UI:MoveEntry(index, delta)
   local target = index + delta
   if index < 1 or target < 1 or index > #tracks or target > #tracks then return end
   tracks[index], tracks[target] = tracks[target], tracks[index]
-  if self.selectedIndex == index then self.selectedIndex = target
-  elseif self.selectedIndex == target then self.selectedIndex = index end
+  if self.selectedIndex == index then
+    self.selectedIndex = target
+  elseif self.selectedIndex == target then
+    self.selectedIndex = index
+  end
   self:Refresh()
   Addon:RequestRebuild()
 end
 
-local function EnsureRow(self, index)
-  local row = self.rows[index]
-  if row then return row end
-  row = CreateFrame("Frame", nil, self.listChild)
-  row:SetSize(630, 26)
-  row.icon = row:CreateTexture(nil, "ARTWORK")
-  row.icon:SetSize(20, 20)
-  row.icon:SetPoint("LEFT", 2, 0)
-  row.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-  row.enabled = CreateCheckbox(row, "", function() end)
-  row.enabled:SetPoint("LEFT", row.icon, "RIGHT", 2, 0)
-  row.up = CreateButton(row, "^", 22, function() end)
-  row.up:SetPoint("LEFT", row.enabled, "RIGHT", 2, 0)
-  row.down = CreateButton(row, "v", 22, function() end)
-  row.down:SetPoint("LEFT", row.up, "RIGHT", 2, 0)
-  row.text = CreateLabel(row, "", "GameFontHighlight")
-  row.text:SetPoint("LEFT", row.down, "RIGHT", 6, 0)
-  row.text:SetWidth(390)
-  row.edit = CreateButton(row, "Edit", 50, function() end)
-  row.edit:SetPoint("LEFT", row.text, "RIGHT", 6, 0)
-  row.remove = CreateButton(row, "Remove", 64, function() end)
-  row.remove:SetPoint("LEFT", row.edit, "RIGHT", 6, 0)
-  self.rows[index] = row
-  return row
-end
-
 function UI:Refresh()
   if not self.frame then self:Create() end
+
+  local readOnly = Addon.IsDBReadOnly and Addon:IsDBReadOnly()
+  if readOnly then
+    self.dbWarning:SetText(string.format(
+      "Saved DB schema %d is newer than supported schema %d. Changes are session-only.",
+      Addon.dbSourceVersion or 0,
+      Addon.DB_VERSION or 0
+    ))
+    self.dbWarning:Show()
+    self.resetDB:SetText("Replace DB")
+  else
+    self.dbWarning:Hide()
+    self.resetDB:SetText("Reset DB")
+  end
+
   self.lockCheck:SetChecked(Addon.db.frame.locked == true)
   self.debugCheck:SetChecked(Addon.db.debug == true)
   self.minimapCheck:SetChecked(Addon.db.minimap.hide == true)
@@ -462,28 +590,17 @@ function UI:Refresh()
   self.spacingSlider:Refresh()
   SetDropdown(self.growDrop, GROWS, Addon.db.frame.grow)
 
-  for _, row in ipairs(self.rows) do row:Hide() end
   local tracks = EnsureTracks()
-  local y = 0
-  for index, entry in ipairs(tracks) do
-    local row = EnsureRow(self, index)
-    row:ClearAllPoints()
-    row:SetPoint("TOPLEFT", self.listChild, "TOPLEFT", 0, -y)
-    y = y + 27
-    row.icon:SetTexture(U.GetSpellIcon(entry.id) or "Interface\\Icons\\INV_Misc_QuestionMark")
-    row.text:SetText(PrettyEntry(entry))
-    row.enabled:SetChecked(entry.enabled ~= false)
-    row.enabled:SetScript("OnClick", function(button)
-      entry.enabled = button:GetChecked() == true
-      Addon:RequestRebuild()
-    end)
-    row.up:SetScript("OnClick", function() UI:MoveEntry(index, -1) end)
-    row.down:SetScript("OnClick", function() UI:MoveEntry(index, 1) end)
-    row.edit:SetScript("OnClick", function() UI:LoadEntry(index) end)
-    row.remove:SetScript("OnClick", function() UI:RemoveEntry(index) end)
-    row:Show()
-  end
-  self.listChild:SetHeight(math.max(1, y))
+  self.listHeading:SetText(string.format("Tracked (%d)", #tracks))
+  local dataProvider = CreateIndexRangeDataProvider(#tracks)
+  self.scrollBox:SetDataProvider(dataProvider, ScrollBoxConstants.RetainScrollPosition)
+end
+
+function UI:OnDatabaseReset()
+  if not self.frame then return end
+  self:ClearForm()
+  self:Refresh()
+  self.scrollBox:ScrollToBegin()
 end
 
 function Addon:ToggleConfig()
