@@ -1,168 +1,68 @@
 # Roth Spell Tracker agent guide
 
-## Start here
+## Target
 
-Read, in order:
+- Retail / Midnight `12.1.5`
+- Interface `120105`
+- addon `0.4.4`
+- DB schema `3`
+- reviewed source evidence `12.1.5.70783` / `297d7aaaa736f346b3e036f38ee088eaf7f8c07f`
+- runtime validation `NOT-RUN`
 
-1. [`RothSpellTracker.toc`](RothSpellTracker.toc)
-2. [`Core/Config.lua`](Core/Config.lua)
-3. [`Core/Util.lua`](Core/Util.lua)
-4. [`Core/Core.lua`](Core/Core.lua)
-5. [`Modules/Display.lua`](Modules/Display.lua)
-6. [`Modules/ManagedAuras.lua`](Modules/ManagedAuras.lua)
-7. [`Modules/Tracker.lua`](Modules/Tracker.lua)
-8. [`Core/ConfigUI.lua`](Core/ConfigUI.lua)
+Read the TOC, then `Core/Config.lua`, `Core/Util.lua`, `Core/Core.lua`, `Modules/Display.lua`, `Modules/ManagedAuras.lua`, `Modules/Tracker.lua`, and `Core/ConfigUI.lua`.
 
-Target contract:
+## Hard AURA boundaries
 
-- Retail / Midnight `12.1.0`;
-- Interface `120100`;
-- addon version `0.3.0`;
-- verified Blizzard source baseline `12.1.0.69497`;
-- required Blizzard dependency `Blizzard_AuraContainer`;
-- one SavedVariables root, `RothSpellTrackerDB`.
+Never add raw aura reads/events, managed AuraButton readback, frame-tree scans, duplicate `UpdateAllAuras()` calls or addon-owned target/focus refresh logic. Keep one `CustomAuraContainer` plus one `AddAuraSlot` per active AURA UID. Construct adopted descendants and final layering during `initializeFrame`. Never reparent an adopted container or descendant; retire an invariant-breaking graph and create a fresh graph with its final parent.
 
-## Non-negotiable 12.1 boundary
+## Access and SPELL rules
 
-AURA tracks are display-only managed AuraContainer consumers. Never restore the former raw scanner.
+- Gate every game value with `canaccessvalue` / `canaccesstable` before use; `pcall` is containment only.
+- `C_SpellBook.IsSpellKnown` is primary; deprecated globals are fallback-only.
+- Resolve and cache base/override identity; invalidate it on spellbook/override/form/spec/talent/world changes.
+- Capture `isOnGCD` only inside `SPELL_UPDATE_COOLDOWN` and match the same resolved spell and exact cycle.
+- For `maxCharges > 1`, show the authoritative current count including `0` and `1`; do not conflate count visibility with recharge timing.
+- Readiness comes from knowledge, usability, charges and the normal cooldown lane. LoC metadata selects presentation only.
+- An on-hold cooldown (`isEnabled == false`, `isActive == false`) blocks readiness but must not produce an active radial tuple.
+- Keep `charge < normal < LoC < overlay`; protected cooldown mutation stays outside combat.
 
-Forbidden runtime paths include:
+## Persistence rule
 
-```text
-UNIT_AURA
-C_UnitAuras
-UnitAura
-AuraUtil.ForEachAura
-GetAuraDataByIndex
-GetAuraDataByAuraInstanceID
-raw AuraData caches
-managed AuraButton visibility/alpha/count/frame-count queries
-GetChildren / GetNumChildren for aura discovery
-```
+- Runtime tracks and UIDs are bounded to `1..500`; candidate input is bounded to 2,000 rows.
+- Bound legacy key and enum text before conversion/comparison.
+- Legacy aliases require a total deterministic order before deduplication and track capping.
+- Supported schemas are canonical allowlisted copies; do not retain unknown nested keys by mutating the source in place.
+- Never rewrite a SavedVariables root whose schema is newer than `DB_VERSION`.
+- A future schema uses a session-only fallback until explicit confirmed replacement.
+- Reset/repair is destructive and must pass through `ConfirmResetDB`.
 
-Each aura track must remain one `CustomAuraContainer` plus one `AddAuraSlot` with an `includeSpellIDs` candidate-filter map. The initialization callback may configure icon/count/cooldown/static child art; after initialization, do not retain or inspect the managed AuraButton.
+## Configuration UI rule
 
-Blizzard owns aura assignment, visibility, applications, duration, private/restricted state, sorting, refresh events, and candidate evaluation.
+- Use `WowScrollBoxList`, `MinimalScrollBar`, `CreateScrollBoxListLinearView` and `CreateIndexRangeDataProvider`.
+- Do not restore `UIPanelScrollFrameTemplate`, FauxScrollFrame, HybridScrollFrame or one row tree per track.
+- Element data is an ordinary track index. Every action calls `GetElementData()` and re-resolves the current track.
+- Create row regions/scripts once; the initializer only binds current icon/text/check/button state.
+- Row frames, provider elements and scroll positions are runtime presentation state, never persistence identity.
 
-## Track schema
+## Lifecycle rule
 
-Schema v3 uses a stable numeric `uid` for runtime container ownership.
-
-SPELL:
-
-```text
-uid, id, kind=SPELL, enabled,
-showWhen=ALWAYS|READY|NOTREADY,
-ignoreGCD
-```
-
-AURA:
-
-```text
-uid, id, kind=AURA, enabled,
-showWhen=ALWAYS|ACTIVE,
-unit=player|target|focus,
-auraType=HELPFUL|HARMFUL
-```
-
-Do not reintroduce `minStacks` or `INACTIVE`. Missing-only and stack-threshold behavior require observing managed aura state and are not a safe general-purpose 12.1 feature. Migration maps old `INACTIVE` to `ALWAYS` and removes stack thresholds.
-
-## Access-first spell handling
-
-All game-returned spell values go through `Core/Util.lua`:
-
-- `U.CanAccess` before treating a value as ordinary;
-- `U.SafeBool`, `SafeNumber`, `SafeString`, `SafeTable` for control-flow data;
-- `U.GetSpellName`, `GetSpellIcon`, `IsSpellKnown`, `IsUsableSpell`, `GetSpellCooldown`, `GetSpellCharges` for API boundaries;
-- `U.SafeToString` for diagnostics.
-
-Do not call `type`, compare, branch, perform arithmetic, index, format, concatenate, log, cache, or persist a raw game value before the access decision.
-
-`pcall` contains API errors; it does not authorize inspecting returned data.
-
-## GCD rule
-
-A SPELL track may ignore a cooldown only when:
-
-```lua
-track.ignoreGCD ~= false and cooldown.isOnGCD == true
-```
-
-`isOnGCD` must be an accessible ordinary boolean returned by the wrapper. Duration, start time, specialization, or historical thresholds are not legal substitutes. Unknown classification fails closed as a real cooldown.
-
-## Stable layout and combat
-
-`Modules/Display.lua` reserves one slot for every enabled track in DB order. Dynamic spell readiness and managed aura assignment never compact or reorder slots.
-
-Frame/container creation, managed-slot reconfiguration, anchor changes, sizing, and layout rebuilds must not occur in combat. `Display.pendingRebuild` defers the latest configuration to `PLAYER_REGEN_ENABLED`.
-
-Spell visual regions and glow are precreated during rebuild. Do not create a glow or template on first activation during combat.
-
-AURA `ALWAYS` is implemented with a static dim placeholder behind the managed button. The placeholder never reads managed state. `ACTIVE` simply hides the placeholder; the stable slot remains.
-
-## Module routing
-
-- `Core/Config.lua`: schema/version/defaults only.
-- `Core/Util.lua`: access gates and sanitized spell API wrappers.
-- `Core/Logging.lua`: bounded 250-line ordinary-text ring.
-- `Core/Core.lua`: DB migration/sanitization, lifecycle, slash ownership, reset/rebuild boundary.
-- `Core/Minimap.lua`: LDB/DBIcon object only.
-- `Core/ConfigUI.lua`: supported track editor and global controls.
-- `Modules/Display.lua`: anchor, stable slots, spell visuals, layout/lock/position, combat deferral.
-- `Modules/ManagedAuras.lua`: managed container/slot lifecycle and target/focus refresh.
-- `Modules/Tracker.lua`: SPELL-only event/evaluation path.
-
-## Slash ownership
-
-Do not restore `/rst`. Roth Secret Tester owns that alias. Valid tracker aliases are:
-
-```text
-/rothspelltracker
-/rspellt
-/spelltracker
-```
-
-## Performance invariants
-
-- no permanent `OnUpdate` in tracker code;
-- no addon aura event or aura scan;
-- no frame-tree scan;
-- spell event bursts coalesce to one zero-delay refresh;
-- target/focus changes call `UpdateAllAuras` only on matching managed containers;
-- no runtime layout compaction based on state;
-- DB track count remains capped at 500;
-- logger remains a bounded ring.
+- Dynamic state never compacts or reorders tracker slots.
+- `Display:Init` creates only; Core owns one login rebuild.
+- Geometry uses `RequestLayout`; structural changes use `RequestRebuild`.
+- No permanent `OnUpdate`, polling ticker, raw payload rebroadcast or duplicate owner.
+- Logger, state maps, resolution cache and ScrollBox frame pool remain bounded.
 
 ## Verification
 
-Local checks:
-
 ```text
-texlua --luaconly Core/*.lua
-texlua --luaconly Modules/*.lua
-texlua --luaconly tests/*.lua
-texlua tests/test_managed_aura_12_1.lua
-texlua tests/test_spell_state_12_1.lua
+luac5.1 -p Core/*.lua Modules/*.lua libs/**/*.lua tests/*.lua
+lua5.1 tests/test_config_ui_12_1_5.lua
+lua5.1 tests/test_database_12_1_5.lua
+lua5.1 tests/test_edge_contract_12_1_5.lua
+lua5.1 tests/test_managed_aura_12_1.lua
+lua5.1 tests/test_repository_contract.lua
+lua5.1 tests/test_spell_state_12_1.lua
+lua5.1 tests/test_support_12_1_5.lua
 ```
 
-Expected results:
-
-```text
-PASS: AURA tracks use managed AddAuraSlot sinks without raw aura reads or combat-time frame creation
-PASS: SPELL tracks ignore only explicit GCD evidence and fail closed on inaccessible cooldown/charge/usability values
-```
-
-Static review must find no raw aura API/event paths in addon runtime and no literal `/rst` registration.
-
-Live-client gates:
-
-- fresh v1/v2/v3 SavedVariables and reload;
-- add/edit/remove/reorder SPELL and AURA tracks;
-- player/target/focus helpful/harmful relationship combinations;
-- target/focus identity changes;
-- active/missing aura transitions and count/duration sinks;
-- known/unknown/overridden spells, charges, explicit GCD and real cooldowns;
-- configuration changes during combat and one post-combat rebuild;
-- no taint, forbidden-object, secret-value, repeating error, or performance regression.
-
-Mocked/static success does not prove live managed-template, relationship-filter, or restricted-object behavior. Record the exact build and context for all client evidence.
+Do not report runtime PASS without exact client build, addon commit and captured observations. Remaining gates are in `todo.md`.

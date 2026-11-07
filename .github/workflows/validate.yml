@@ -1,0 +1,45 @@
+name: Validate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lua:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Lua 5.1
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y lua5.1
+
+      - name: Validate Lua syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            echo "syntax: $file"
+            luac5.1 -p "$file"
+          done < <(find Core Modules libs tests -type f -name '*.lua' -print0 | sort -z)
+
+      - name: Run deterministic regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test in tests/test_*.lua; do
+            echo "==> $test"
+            lua5.1 "$test"
+          done
